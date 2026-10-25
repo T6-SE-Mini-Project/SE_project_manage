@@ -1,8 +1,8 @@
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
-
 
 class CustomerRegistrationTests(TestCase):
     def setUp(self):
@@ -90,6 +90,7 @@ class CustomerRegistrationTests(TestCase):
 class CustomerLoginTests(TestCase):
     def setUp(self):
         self.url = reverse("customer_login")
+        self.success_url = reverse("login_success")
         self.username = "loginuser"
         self.password = "A-Strong-Test-Pass-938!"
 
@@ -114,10 +115,7 @@ class CustomerLoginTests(TestCase):
             },
         )
 
-        self.assertRedirects(
-            response,
-            reverse("login_success"),
-        )
+        self.assertRedirects(response, self.success_url)
         self.assertEqual(
             int(self.client.session["_auth_user_id"]),
             User.objects.get(username=self.username).pk,
@@ -146,3 +144,81 @@ class CustomerLoginTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_login_success_requires_authentication(self):
+        response = self.client.get(self.success_url)
+
+        expected_url = (
+            f"{self.url}?next={self.success_url}"
+        )
+
+        self.assertRedirects(response, expected_url)
+
+    def test_authenticated_user_can_access_login_success(self):
+        user = User.objects.get(username=self.username)
+        self.client.force_login(user)
+
+        response = self.client.get(self.success_url)
+
+        self.assertEqual(response.status_code, 200)
+
+
+
+class SessionTimeoutTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="sessionuser",
+            email="sessionuser@example.com",
+            password="A-Strong-Test-Pass-938!",
+        )
+
+    def test_session_cookie_age_is_15_minutes(self):
+        from django.conf import settings
+
+        self.assertEqual(settings.SESSION_COOKIE_AGE, 900)
+
+    def test_expired_session_cannot_access_protected_page(self):
+        self.client.force_login(self.user)
+
+        session = self.client.session
+        session.set_expiry(-1)
+        session.save()
+
+        response = self.client.get(reverse("login_success"))
+
+        self.assertRedirects(
+            response,
+            f"{reverse('customer_login')}?next={reverse('login_success')}",
+        )
+
+
+class AdminAuthorizationTests(TestCase):
+    def test_anonymous_user_cannot_access_admin(self):
+        response = self.client.get(reverse("admin:index"))
+
+        self.assertIn(response.status_code, [301, 302])
+
+    def test_regular_customer_cannot_access_admin(self):
+        customer = User.objects.create_user(
+            username="regularcustomer",
+            email="customer@example.com",
+            password="A-Strong-Test-Pass-938!",
+        )
+        self.client.force_login(customer)
+
+        response = self.client.get(reverse("admin:index"))
+
+        self.assertIn(response.status_code, [301, 302, 403])
+
+    def test_staff_user_can_access_admin(self):
+        staff_user = User.objects.create_user(
+            username="staffmember",
+            email="staff@example.com",
+            password="A-Strong-Test-Pass-938!",
+            is_staff=True,
+        )
+        self.client.force_login(staff_user)
+
+        response = self.client.get(reverse("admin:index"))
+
+        self.assertEqual(response.status_code, 200)
