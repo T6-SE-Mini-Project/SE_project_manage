@@ -58,7 +58,7 @@ jobs:
           DEBUG: "True"
         run: python manage.py check
 
-      - name: Run registration and login tests
+      - name: Run Django tests
         env:
           DB_NAME: online_book_store
           DB_USER: root
@@ -67,4 +67,31 @@ jobs:
           DB_PORT: "3306"
           DJANGO_SECRET_KEY: ci-only-secret-key
           DEBUG: "True"
-        run: python manage.py test accounts
+        run: python manage.py test accounts books cart
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
