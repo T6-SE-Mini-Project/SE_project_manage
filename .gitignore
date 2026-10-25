@@ -1,6 +1,13 @@
+
 .venv/
 .env
 __pycache__/
 *.py[cod]
 .vscode/
 Docs/~$*
+
+# React frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+

@@ -39,6 +39,8 @@ INSTALLED_APPS = [
 
     # Online Book Store applications
     "accounts",
+    "books",
+    "cart",
 ]
 
 
