@@ -50,7 +50,7 @@ jobs:
           DB_PASSWORD: ci_test_password
           DB_HOST: 127.0.0.1
           DB_PORT: "3306"
-          SECRET_KEY: ci-only-secret-key
+          DJANGO_SECRET_KEY: ci-only-secret-key
           DEBUG: "True"
         run: python manage.py check
 
@@ -61,6 +61,6 @@ jobs:
           DB_PASSWORD: ci_test_password
           DB_HOST: 127.0.0.1
           DB_PORT: "3306"
-          SECRET_KEY: ci-only-secret-key
+          DJANGO_SECRET_KEY: ci-only-secret-key
           DEBUG: "True"
         run: python manage.py test accounts
