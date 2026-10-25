@@ -17,8 +17,7 @@ jobs:
         env:
           MYSQL_ROOT_PASSWORD: ci_root_password
           MYSQL_DATABASE: online_book_store
-          MYSQL_USER: user1
-          MYSQL_PASSWORD: ci_test_password
+          
         ports:
           - 3306:3306
         options: >-
@@ -46,8 +45,8 @@ jobs:
       - name: Run Django system checks
         env:
           DB_NAME: online_book_store
-          DB_USER: user1
-          DB_PASSWORD: ci_test_password
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
           DB_HOST: 127.0.0.1
           DB_PORT: "3306"
           DJANGO_SECRET_KEY: ci-only-secret-key
