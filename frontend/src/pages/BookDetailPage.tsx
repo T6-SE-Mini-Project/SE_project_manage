@@ -1,79 +1,48 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { addToCart, getBook } from "../api";
 import AddToCartButton from "../components/AddToCartButton";
 import BookCover from "../components/BookCover";
+import { useAddToCart, useBook } from "../hooks/useBookStore";
 import { formatDate, formatPrice } from "../format";
+
+type Feedback = { type: "success" | "error"; text: string } | null;
 
 export default function BookDetailPage() {
   const { bookId } = useParams();
 
-  const [book, setBook] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [notFound, setNotFound] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [feedback, setFeedback] = useState(null);
+  const bookQuery = useBook(bookId);
+  const addToCartMutation = useAddToCart();
+
+  const [feedback, setFeedback] = useState<Feedback>(null);
   const [added, setAdded] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-
-    setLoading(true);
-    setError("");
-    setNotFound(false);
-    setBook(null);
-    setFeedback(null);
-    setAdded(false);
-
-    getBook(bookId)
-      .then((data) => {
-        if (active) {
-          setBook(data.book);
-        }
-      })
-      .catch((requestError) => {
-        if (!active) {
-          return;
-        }
-        if (requestError.status === 404) {
-          setNotFound(true);
-        } else {
-          setError(requestError.message);
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [bookId]);
+  const book = bookQuery.data?.book;
+  const notFound = bookQuery.error?.status === 404;
 
   async function handleAdd() {
     if (!book) {
       return;
     }
 
-    setAdding(true);
     setFeedback(null);
 
     try {
-      await addToCart(book.id);
+      await addToCartMutation.mutateAsync({ bookId: book.id });
       setAdded(true);
       setFeedback({ type: "success", text: "Added to cart." });
     } catch (requestError) {
-      setFeedback({ type: "error", text: requestError.message });
-    } finally {
-      setAdding(false);
+      setFeedback({
+        type: "error",
+        text:
+          requestError instanceof Error
+            ? requestError.message
+            : "Could not add the book to your cart.",
+      });
     }
   }
 
-  if (loading) {
+  if (bookQuery.isPending) {
     return <div className="status-panel">Loading book details...</div>;
   }
 
@@ -89,11 +58,13 @@ export default function BookDetailPage() {
     );
   }
 
-  if (error || !book) {
+  if (bookQuery.isError || !book) {
     return (
       <div className="status-panel">
         <h1>Could not load this book</h1>
-        <p>{error || "An unexpected error occurred."}</p>
+        <p>
+          {bookQuery.error?.message || "An unexpected error occurred."}
+        </p>
         <Link className="text-link" to="/books">
           Back to the catalogue
         </Link>
@@ -131,7 +102,7 @@ export default function BookDetailPage() {
           <div className="detail-actions">
             <AddToCartButton
               onAdd={handleAdd}
-              busy={adding}
+              busy={addToCartMutation.isPending}
               disabled={!book.in_stock}
             />
             {added ? (

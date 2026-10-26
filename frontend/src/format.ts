@@ -3,7 +3,7 @@ const priceFormatter = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
-export function formatPrice(value) {
+export function formatPrice(value: string | number): string {
   const amount = Number(value);
 
   if (Number.isNaN(amount)) {
@@ -13,7 +13,7 @@ export function formatPrice(value) {
   return priceFormatter.format(amount);
 }
 
-export function formatDate(value) {
+export function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "Not specified";
   }

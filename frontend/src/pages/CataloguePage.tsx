@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { getBooks, getCategories } from "../api";
 import BookCard from "../components/BookCard";
+import { useBooks, useCategories } from "../hooks/useBookStore";
+import type { BookFilters } from "../types";
 
-const EMPTY_FILTERS = {
+const EMPTY_FILTERS: Record<keyof BookFilters, string> = {
   q: "",
   category: "",
   author: "",
@@ -13,10 +14,12 @@ const EMPTY_FILTERS = {
   available: "",
 };
 
-function readFilters(params) {
+const FILTER_KEYS = Object.keys(EMPTY_FILTERS) as Array<keyof BookFilters>;
+
+function readFilters(params: URLSearchParams): Record<keyof BookFilters, string> {
   return Object.fromEntries(
-    Object.keys(EMPTY_FILTERS).map((key) => [key, params.get(key) || ""]),
-  );
+    FILTER_KEYS.map((key) => [key, params.get(key) || ""]),
+  ) as Record<keyof BookFilters, string>;
 }
 
 export default function CataloguePage() {
@@ -24,74 +27,35 @@ export default function CataloguePage() {
   const queryString = searchParams.toString();
 
   const [draft, setDraft] = useState(() => readFilters(searchParams));
-  const [books, setBooks] = useState([]);
-  const [count, setCount] = useState(0);
-  const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+
+  const filters = FILTER_KEYS.reduce<Record<string, string>>(
+    (acc, key) => {
+      const value = searchParams.get(key);
+      if (value) {
+        acc[key] = value;
+      }
+      return acc;
+    },
+    {},
+  );
+
+  const booksQuery = useBooks(filters as BookFilters);
+  const categoriesQuery = useCategories();
 
   useEffect(() => {
     setDraft(readFilters(new URLSearchParams(queryString)));
   }, [queryString]);
 
-  useEffect(() => {
-    let active = true;
+  const books = booksQuery.data?.books ?? [];
+  const count = booksQuery.data?.count ?? 0;
+  const categories = categoriesQuery.data?.categories ?? [];
 
-    getCategories()
-      .then((data) => {
-        if (active) {
-          setCategories(data.categories);
-        }
-      })
-      .catch(() => {
-        // The catalogue still works without the category suggestions.
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    const filters = Object.fromEntries(
-      new URLSearchParams(queryString).entries(),
-    );
-
-    setLoading(true);
-    setError("");
-
-    getBooks(filters)
-      .then((data) => {
-        if (active) {
-          setBooks(data.books);
-          setCount(data.count);
-        }
-      })
-      .catch((requestError) => {
-        if (active) {
-          setError(requestError.message);
-          setBooks([]);
-          setCount(0);
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [queryString]);
-
-  function handleChange(event) {
+  function handleChange(event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     const { name, value } = event.target;
     setDraft((current) => ({ ...current, [name]: value }));
   }
 
-  function handleSubmit(event) {
+  function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
 
     const next = new URLSearchParams();
@@ -222,18 +186,18 @@ export default function CataloguePage() {
       </form>
 
       <div className="results-heading" role="status" aria-live="polite">
-        {loading
+        {booksQuery.isPending
           ? "Loading books..."
           : `${count} book${count === 1 ? "" : "s"} found`}
       </div>
 
-      {error ? (
+      {booksQuery.isError ? (
         <div className="alert error" role="alert">
-          {error}
+          {booksQuery.error.message}
         </div>
       ) : null}
 
-      {!loading && !error && books.length === 0 ? (
+      {!booksQuery.isPending && !booksQuery.isError && books.length === 0 ? (
         <div className="empty-state">
           <h2>No books match those filters</h2>
           <p>Try a broader search or reset the filters to see the catalogue.</p>

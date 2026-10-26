@@ -1,87 +1,74 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
-import { getCart, removeCartItem, updateCartItem } from "../api";
 import BookCover from "../components/BookCover";
+import {
+  useCart,
+  useRemoveCartItem,
+  useUpdateCartItem,
+} from "../hooks/useBookStore";
 import { formatPrice } from "../format";
 
 export default function CartPage() {
-  const [cart, setCart] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  const cartQuery = useCart();
+  const updateMutation = useUpdateCartItem();
+  const removeMutation = useRemoveCartItem();
+
+  const [pendingItemId, setPendingItemId] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [pendingItemId, setPendingItemId] = useState(null);
 
-  useEffect(() => {
-    let active = true;
+  const cart = cartQuery.data?.cart;
 
-    getCart()
-      .then((data) => {
-        if (active) {
-          setCart(data.cart);
-        }
-      })
-      .catch((requestError) => {
-        if (active) {
-          setError(requestError.message);
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setLoading(false);
-        }
-      });
+  async function runItemAction(itemId: number, action: () => Promise<unknown>) {
+    setPendingItemId(itemId);
+    setError("");
 
-    return () => {
-      active = false;
-    };
-  }, []);
+    try {
+      await action();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Could not update the cart.",
+      );
+    } finally {
+      setPendingItemId(null);
+    }
+  }
 
-  async function changeQuantity(item, quantity) {
+  function changeQuantity(item: { id: number; quantity: number; book: { stock_quantity: number } }, quantity: number) {
     if (quantity < 1 || quantity > item.book.stock_quantity) {
       return;
     }
-
-    setPendingItemId(item.id);
-    setError("");
-
-    try {
-      const data = await updateCartItem(item.id, quantity);
-      setCart(data.cart);
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setPendingItemId(null);
-    }
+    void runItemAction(item.id, () =>
+      updateMutation.mutateAsync({ itemId: item.id, quantity }),
+    );
   }
 
-  async function removeItem(item) {
-    setPendingItemId(item.id);
-    setError("");
-
-    try {
-      const data = await removeCartItem(item.id);
-      setCart(data.cart);
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setPendingItemId(null);
-    }
+  function removeItem(itemId: number) {
+    void runItemAction(itemId, () => removeMutation.mutateAsync(itemId));
   }
 
-  if (loading) {
+  if (cartQuery.isPending) {
     return <div className="status-panel">Loading your cart...</div>;
   }
 
-  if (!cart && error) {
+  if (cartQuery.isError) {
     return (
       <div className="status-panel">
         <h1>Could not load your cart</h1>
-        <p>{error}</p>
+        <p>{cartQuery.error.message}</p>
         <Link className="text-link" to="/books">
           Back to the catalogue
         </Link>
       </div>
     );
+  }
+
+  if (!cart) {
+    return null;
   }
 
   return (
@@ -103,7 +90,7 @@ export default function CartPage() {
         </div>
       ) : null}
 
-      {cart && cart.items.length === 0 ? (
+      {cart.items.length === 0 ? (
         <div className="empty-state">
           <h2>Your cart is empty</h2>
           <p>Browse the catalogue and add a book to get started.</p>
@@ -111,9 +98,7 @@ export default function CartPage() {
             Browse books
           </Link>
         </div>
-      ) : null}
-
-      {cart && cart.items.length > 0 ? (
+      ) : (
         <div className="cart-layout">
           <div className="cart-items">
             {cart.items.map((item) => {
@@ -167,7 +152,7 @@ export default function CartPage() {
                     type="button"
                     className="button-link danger"
                     disabled={pending}
-                    onClick={() => removeItem(item)}
+                    onClick={() => removeItem(item.id)}
                   >
                     Remove
                   </button>
@@ -186,15 +171,19 @@ export default function CartPage() {
               <span>Total</span>
               <strong>{formatPrice(cart.total)}</strong>
             </div>
-            <p className="muted">
-              Checkout and payment are handled in a later milestone.
-            </p>
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => navigate("/checkout")}
+            >
+              Proceed to checkout
+            </button>
             <Link className="button secondary" to="/books">
               Continue shopping
             </Link>
           </aside>
         </div>
-      ) : null}
+      )}
     </section>
   );
 }

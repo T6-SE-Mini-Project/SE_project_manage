@@ -1,4 +1,14 @@
-export default function AddToCartButton({ onAdd, busy = false, disabled = false }) {
+interface AddToCartButtonProps {
+  onAdd: () => void;
+  busy?: boolean;
+  disabled?: boolean;
+}
+
+export default function AddToCartButton({
+  onAdd,
+  busy = false,
+  disabled = false,
+}: AddToCartButtonProps) {
   return (
     <button
       type="button"

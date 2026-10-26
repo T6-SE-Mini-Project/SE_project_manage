@@ -1,6 +1,16 @@
 import { useState } from "react";
 
-export default function BookCover({ book, className = "book-cover" }) {
+import type { BookSummary } from "../types";
+
+interface BookCoverProps {
+  book: Pick<BookSummary, "cover_image_url" | "title">;
+  className?: string;
+}
+
+export default function BookCover({
+  book,
+  className = "book-cover",
+}: BookCoverProps) {
   const [failed, setFailed] = useState(false);
 
   if (!book.cover_image_url || failed) {

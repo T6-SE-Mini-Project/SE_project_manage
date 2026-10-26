@@ -1,9 +1,14 @@
 import { Link } from "react-router-dom";
 
 import { formatPrice } from "../format";
+import type { BookSummary } from "../types";
 import BookCover from "./BookCover";
 
-export default function BookCard({ book }) {
+interface BookCardProps {
+  book: BookSummary;
+}
+
+export default function BookCard({ book }: BookCardProps) {
   return (
     <article className="book-card">
       <Link

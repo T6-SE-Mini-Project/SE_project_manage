@@ -1,20 +1,26 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import AddToCartButton from "./AddToCartButton";
 
+declare global {
+  // React's act() requires this flag in test environments.
+  var IS_REACT_ACT_ENVIRONMENT: boolean;
+}
+
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("AddToCartButton (TC-OBS-022)", () => {
-  let container;
-  let root;
+  let container: HTMLDivElement | null = null;
+  let root: Root | null = null;
 
   afterEach(() => {
-    if (root) {
+    const currentRoot = root;
+    if (currentRoot) {
       act(() => {
-        root.unmount();
+        currentRoot.unmount();
       });
     }
     if (container) {
@@ -29,13 +35,14 @@ describe("AddToCartButton (TC-OBS-022)", () => {
 
     container = document.createElement("div");
     document.body.appendChild(container);
-    root = createRoot(container);
+    const currentRoot = createRoot(container);
+    root = currentRoot;
 
     act(() => {
-      root.render(<AddToCartButton onAdd={onAdd} />);
+      currentRoot.render(<AddToCartButton onAdd={onAdd} />);
     });
 
-    const button = container.querySelector("button");
+    const button = container.querySelector("button")!;
     expect(button.textContent).toMatch(/add to cart/i);
 
     act(() => {
