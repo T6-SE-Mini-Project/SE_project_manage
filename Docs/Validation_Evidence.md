@@ -122,3 +122,160 @@ Recorded result: 60 tests passed in 29.710 seconds. No test failures were report
 - The test suite runs against the database configured for the test environment. Production database behavior has not been independently audited.
 - The results apply to the code and configuration used during this execution.
 - The requirement IDs and test-case IDs above should be checked against the project's authoritative SRS and test plan before final submission.
+
+---
+
+# Validation Evidence — Issues #8, #9, #10, #11, #12, #17, #18, #24
+
+- **Branch:** `feature/orders-payments-puneeth`
+- **Execution date:** 2026-10-26
+- **Local environment:** Linux, Python 3.12, Django 5.2.18, gunicorn 23.0.0, Node.js 24.21.0, npm 11.19.0, React 18.3.1, TypeScript 5.6, Vite 5.4.21, Vitest 2.1.9
+- **Local test database:** Isolated SQLite via `config.settings_test`. The development MySQL database was not migrated and was not used for any test.
+- **CI database:** MySQL 8.0 (`.github/workflows/main.yml`), which now runs the whole suite plus a missing-migration check.
+
+## Automated test suite
+
+```
+cd backend
+python manage.py check --settings=config.settings_test
+# System check identified no issues (0 silenced).
+
+python manage.py makemigrations --check --dry-run --settings=config.settings_test
+# No changes detected
+
+python manage.py test --settings=config.settings_test
+# Ran 232 tests in 4.146s
+# OK
+```
+
+```
+cd frontend
+npm run typecheck   # no errors
+npm test            # 3 test files, 8 tests passed
+npm run build       # built successfully (tsc --noEmit then vite build)
+```
+
+The suite grew from 95 to 232 backend tests over this work: 31 for issue
+#10, 32 for #11, 55 for #12 and #24, 19 for #18, and the auth-API tests
+that order history depends on.
+
+## Test-case mapping and results
+
+| Test case | Requirement | Implementation | Automated evidence | Result |
+|---|---|---|---|---|
+| TC-OBS-010 | OBS-F-010, OBS-F-011 Order placement and availability | `POST /api/orders/`, `GET /api/orders/availability/`; checkout page | `orders.tests.OrderApiTests` (14 tests), `AvailabilityLogicTests` | Pass |
+| TC-OBS-012 | OBS-F-012, OBS-F-013 Payment and confirmation | `POST /api/payments/`; checkout and confirmation pages | `payments.tests.PaymentFlowTests` (17 tests) | Pass |
+| Order viewing | OBS-F-014 Order history | `GET /api/orders/`; `/orders` page | `orders.tests.OrderHistoryTests` (6 tests) | Pass |
+| Order cancellation | OBS-F-015 Cancel eligible orders | `POST /api/orders/<id>/cancel/`; cancel control on `/orders` | `orders.tests.OrderCancellationTests` (12 tests) | Pass |
+| TC-OBS-016 | OBS-F-016 Book reviews | `/api/reviews/`; reviews section on the book details page | `reviews.tests` (32 tests across submission, display and editing) | Pass |
+| TC-OBS-017 | OBS-F-017, OBS-F-018 Administrator catalogue and order management | `/api/admin/books/`, `/api/admin/orders/`; `/admin/books`, `/admin/orders` | `administration.tests.AdminCatalogueTests` (12), `AdminOrderManagementTests` (16), `AdminAuthorizationTests` (6) | Pass |
+| Administrator customers and reports (#24) | SRS administrator capabilities (no separate OBS-F id) | `/api/admin/customers/`, `/api/admin/reports/sales/`; `/admin/customers`, `/admin/reports` | `administration.tests.AdminCustomerManagementTests` (12), `AdminSalesReportTests` (7) | Pass |
+| TC-OBS-023 | OBS-NF-005 Scalability, 500 concurrent users | `backend/loadtest/load_test.py` | `Docs/evidence/tc-obs-023-load-test.{txt,json}` | **Read path pass; write path not validated — see below** |
+| TC-OBS-024 | OBS-NF-006 Automated backups every 24 hours | `manage.py backup_data`, `manage.py verify_backups`, `GET /api/admin/backups/` | `operations.tests` (19 tests); `Docs/evidence/tc-obs-024-backup-evidence.txt` | Pass |
+
+## End-to-end verification against a running server
+
+`scripts/smoke_test.py` was run against gunicorn serving a throwaway
+SQLite database, exercising the API over HTTP exactly as the React app
+does. Full output: `Docs/evidence/integration-smoke-test.txt`.
+
+All 56 checks passed, including:
+
+- An order was placed, paid, and appeared in history with its paid state;
+  stock fell from 12 to 10 on payment and returned to 12 on
+  cancellation, with `refund_due` set. A second cancellation was refused
+  with 409.
+- A review was submitted (average 5.0), a duplicate was refused with 409,
+  an out-of-range rating with 400, and the review was visible to a guest
+  who could not themselves review.
+- All five administrator endpoints returned 401 to a guest and 403 to a
+  signed-in customer, and 200 to an administrator.
+- A book was created with a punctuated ISBN that was normalized to
+  `9781617294136`; a duplicate ISBN and a malformed ISBN were both
+  refused with 400; a partial update changed stock without clearing the
+  title; deleting a book that appears on an order was refused with 409.
+- Skipping fulfilment (CONFIRMED to DELIVERED) was refused with 409,
+  while PROCESSING, SHIPPED and DELIVERED each succeeded in order; a
+  delivered order could not be cancelled by either the administrator or
+  the customer.
+- A customer was deactivated, could then no longer log in (401), and was
+  reactivated; the administrator could not deactivate their own account.
+- The sales report counted 1 revenue order of $42.50 and excluded the
+  cancelled order; an invalid period was refused with 400.
+
+## TC-OBS-023 — OBS-NF-005 scalability, measured
+
+Target: gunicorn (4 workers x 16 threads) serving a throwaway SQLite
+database on one machine. Harness: `backend/loadtest/load_test.py`, 500
+concurrent sessions each with its own cookie jar, released together from
+a barrier.
+
+**Read path — catalogue, search, filter and categories (4000 requests):**
+
+| Measure | Value |
+|---|---|
+| Concurrent users | 500 |
+| Failed requests | 0 |
+| Median response time | 1.4783 s |
+| Mean | 1.3898 s |
+| p95 | 2.0771 s |
+| Max | 2.3036 s |
+| Within the 3.0 s threshold | 4000 / 4000 (100.00%) |
+| Throughput | 148.23 requests/second |
+
+Result: **Pass** against the configured 3.0 s threshold.
+
+**Write path — the same load plus one add-to-cart per user:** 490 of 500
+add-to-cart requests returned HTTP 500. Reproduced with `DJANGO_DEBUG`
+enabled at only 20 concurrent writes: `OperationalError: database is
+locked`. SQLite permits one writer at a time, so this is a limitation of
+the test substrate, not a defect in the application; the project baseline
+is MySQL 8.0, which uses row-level locking.
+
+### Limitations of this measurement
+
+- SQLite, not MySQL. The read figures are therefore indicative, and the
+  write path at 500 concurrent users is **not validated**. It must be
+  re-measured against MySQL 8.0 before OBS-NF-005 can be claimed in
+  full; the harness supports this unchanged via `--include-cart`.
+- The load generator and the server shared one machine's CPU, so the
+  response times include contention that a two-host setup would not have.
+- Catalogue traffic only; checkout and payment were not included in the
+  concurrent scenario.
+
+## TC-OBS-024 — OBS-NF-006 automated backups, verified
+
+`manage.py backup_data --trigger scheduled` was run against a live
+database and then inspected three ways. Full output:
+`Docs/evidence/tc-obs-024-backup-evidence.txt`.
+
+- The run succeeded in 0.077 s, writing 13 records (7169 bytes):
+  `books.book` 7, `orders.order` 2, `orders.orderitem` 2,
+  `payments.payment` 2 — covering both the order data and the inventory
+  (the catalogue carries the stock levels).
+- The artifacts are Django fixtures plus `manifest.json` with per-dataset
+  row counts and SHA-256 checksums, so a backup restores with
+  `manage.py loaddata`.
+- `manage.py verify_backups` reported the last successful backup 0.00
+  hours ago against the 24-hour limit and exited 0.
+- `GET /api/admin/backups/` reported `fresh: true`, `max_age_hours: 24`
+  and the full execution record, and returned 403 to a customer.
+- The `BackupRun` table is the execution record the requirement asks to
+  be inspectable; records are retained even after old artifacts are
+  pruned by `BACKUP_RETENTION_DAYS`.
+
+### Limitations
+
+- This validates the backup mechanism and the 24-hour check. It does not
+  demonstrate a scheduler having run unattended for 24 hours in
+  production: that evidence can only be collected after the cron entry
+  (documented in `README.md` and the command's docstring) has been
+  installed on the deployment host.
+- A restore was not performed against a production-sized MySQL database.
+
+## Notes on issues #8 and #9
+
+The order-placement and payment code was implemented earlier on this
+branch; the tests above were re-run after the issue #10 changes (which
+added `paid_at` and `stock_reserved` to the payment path) and continue to
+pass, together with the end-to-end verification recorded above.

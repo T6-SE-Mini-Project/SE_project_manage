@@ -1,0 +1,44 @@
+TC-OBS-023 / OBS-NF-005 concurrent load test
+============================================
+Target                : http://127.0.0.1:8099
+Started               : 2026-10-26T21:40:22+0530
+Concurrent users      : 500
+Requests per user     : 1 cycles (2500 requests total)
+Wall clock            : 30.003s (83.32 requests/second)
+Failed requests       : 490
+
+Response time (seconds), threshold 3.0s:
+  min                 : 0.0384
+  median              : 1.5043
+  mean                : 1.6899
+  p95                : 3.6417
+  max                 : 5.8516
+  within threshold    : 2262/2500 (90.48%)
+
+Per request type:
+  add_to_cart  n=500    failed=490  mean=2.4885   p95=4.7614   max=5.8516
+  catalogue    n=500    failed=0    mean=1.3415   p95=2.1674   max=2.4425
+  categories   n=500    failed=0    mean=1.7832   p95=3.2631   max=5.7215
+  filter       n=500    failed=0    mean=1.5258   p95=1.8447   max=1.9183
+  search       n=500    failed=0    mean=1.3102   p95=1.7586   max=1.847
+
+Errors:
+     490 x HTTP 500
+
+RESULT: FAIL
+
+JSON report written to Docs/evidence/tc-obs-023-load-test-writes.json
+
+Diagnosis of the 490 failed add_to_cart requests
+------------------------------------------------
+Reproduced with DJANGO_DEBUG=true and 20 concurrent POST /api/cart/items/
+requests: 16 of 20 returned HTTP 500 with
+
+    OperationalError at /api/cart/items/
+    database is locked
+
+SQLite permits a single writer at a time, so concurrent cart writes
+serialise and then time out. This is a limitation of the test substrate,
+not of the application: the project baseline is MySQL 8.0, which uses
+row-level locking. The write path at 500 concurrent users is therefore
+NOT validated by this run and must be re-measured against MySQL.

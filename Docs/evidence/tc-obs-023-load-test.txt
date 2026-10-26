@@ -1,0 +1,26 @@
+TC-OBS-023 / OBS-NF-005 concurrent load test
+============================================
+Target                : http://127.0.0.1:8099
+Started               : 2026-10-26T21:39:44+0530
+Concurrent users      : 500
+Requests per user     : 2 cycles (4000 requests total)
+Wall clock            : 26.985s (148.23 requests/second)
+Failed requests       : 0
+
+Response time (seconds), threshold 3.0s:
+  min                 : 0.005
+  median              : 1.4783
+  mean                : 1.3898
+  p95                : 2.0771
+  max                 : 2.3036
+  within threshold    : 4000/4000 (100.00%)
+
+Per request type:
+  catalogue    n=1000   failed=0    mean=1.3022   p95=2.0362   max=2.2022
+  categories   n=1000   failed=0    mean=1.2079   p95=1.878    max=2.1382
+  filter       n=1000   failed=0    mean=1.5695   p95=2.157    max=2.3036
+  search       n=1000   failed=0    mean=1.4797   p95=2.0692   max=2.2184
+
+RESULT: PASS
+
+JSON report written to Docs/evidence/tc-obs-023-load-test.json

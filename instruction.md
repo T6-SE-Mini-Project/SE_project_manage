@@ -1,0 +1,400 @@
+# How this codebase works, and how to add to it
+
+This is the guide for working on the Online Book Store. `README.md`
+covers installing and running it; this file explains how the code is
+organised, why it is organised that way, and what to do when you add a
+feature.
+
+---
+
+## 1. The shape of the system
+
+```
+Browser
+  │
+  │  React + TypeScript (frontend/)
+  │    pages/  ── render, hold form state
+  │    hooks/  ── every server call (TanStack Query)
+  │    api.ts  ── one typed fetch wrapper, CSRF + errors
+  │    config.ts ─ reads VITE_* environment variables
+  │
+  │  HTTP, JSON, session cookie
+  ▼
+Django (backend/)
+  urls.py      ── routes /api/<area>/ to an app
+  views.py     ── parse the request, choose a status code
+  services.py  ── the business rules, transactions, locking
+  models.py    ── the data and its constraints
+  serializers.py ─ turn models into JSON dicts
+  │
+  ▼
+MySQL (Django ORM)
+```
+
+Two rules hold the whole thing together:
+
+1. **The server decides.** The frontend never computes a total, decides
+   whether an order may be cancelled, or assumes a user is an
+   administrator. It asks, and renders the answer. The UI hiding a button
+   is a convenience, never a control.
+2. **Each layer has one job.** A view does not contain business rules; a
+   service does not know about HTTP; a model does not format JSON.
+
+---
+
+## 2. The backend, layer by layer
+
+### `config/` — the project's spine
+
+| File | Responsibility |
+|---|---|
+| `env.py` | **The only module that reads the environment.** It loads `backend/.env`, validates and types each value, and exposes it as a module attribute. |
+| `settings.py` | Django settings, built from `env`. It never calls `os.environ`. |
+| `urls.py` | Mounts each app under `/api/<area>/`. |
+| `http.py` | Shared JSON helpers: `read_json`, `json_error`, `login_required_api`, `staff_required_api`. |
+| `settings_test.py` | Test-only settings: an isolated SQLite database, so tests never touch the development MySQL database. |
+
+**Adding a setting:** add it to `env.py` with a default and a comment,
+expose it in `settings.py` if Django or an app needs it, and document it
+in both `.env.example` files. Never read `os.environ` anywhere else — one
+place to look is the point.
+
+### Models — the data and its guarantees
+
+Put invariants in the database, not only in Python. A rule enforced by a
+`CheckConstraint` or `UniqueConstraint` cannot be bypassed by a future
+code path, a management command or a data migration:
+
+```python
+class Meta:
+    constraints = [
+        models.UniqueConstraint(
+            fields=["book", "user"],
+            name="unique_review_per_customer_and_book",
+        ),
+        models.CheckConstraint(
+            condition=models.Q(rating__gte=MIN_RATING)
+            & models.Q(rating__lte=MAX_RATING),
+            name="review_rating_within_range",
+        ),
+    ]
+```
+
+Order items snapshot `book_title` and `unit_price` at placement time, so
+history stays truthful when the catalogue changes later. Prefer that over
+a join when the past must stay fixed.
+
+Note: a nested `Meta` class cannot see its enclosing class's attributes,
+which is why `reviews/models.py` defines its rating bounds at module
+level and re-exports them on the model.
+
+### Services — the business rules
+
+Anything involving more than one row, a decision, or money belongs in
+`services.py`. Services are plain functions that take and return
+objects, not requests and responses, so they can be called from a view, a
+management command or a test alike.
+
+Two conventions matter:
+
+**Return outcomes, don't raise, when the "failure" is a normal result.**
+A declined payment is an expected outcome that must still be recorded, so
+`payments.services.process_order_payment` returns a `PaymentOutcome`.
+Raising would roll back the failed-payment row that the order history
+needs. Programming errors still raise.
+
+```python
+order, error = cancel_order(order, reason="Changed my mind")
+if error is not None:
+    return json_error(error, 409)
+```
+
+**Lock the rows you are about to decide on.** Two concurrent requests
+must not both pass the same check:
+
+```python
+@transaction.atomic
+def cancel_order(order, reason="", by_staff=False):
+    order = Order.objects.select_for_update().get(pk=order.pk)
+    if not order.is_cancellable:
+        return None, "This order can no longer be cancelled."
+    ...
+```
+
+Stock is the clearest example: it is decremented only when payment
+succeeds, `Order.stock_reserved` records that the order holds it, and
+cancellation releases it exactly once.
+
+### Views — HTTP only
+
+A view parses input, calls a service, and maps the result to a status
+code. Keep them boring:
+
+```python
+@require_POST
+def order_cancel(request, pk):
+    order = _get_scoped_order(request, pk)
+    if order is None:
+        return json_error("Order not found.", 404)
+
+    data, error_response = read_json(request)
+    if error_response is not None:
+        return error_response
+
+    cancelled, error = cancel_order(order, reason=str(data.get("reason", "")))
+    if error is not None:
+        return json_error(error, 409, order=serialize_order(order))
+
+    return JsonResponse({"order": serialize_order(cancelled)})
+```
+
+Status codes used across the API:
+
+| Code | Meaning |
+|---|---|
+| 200 / 201 | Success / created |
+| 400 | Malformed or invalid input (often with an `errors` map) |
+| 401 | Not signed in (the frontend sends the user to log in) |
+| 403 | Signed in but not allowed (logging in again will not help) |
+| 404 | Not found, or not visible to this caller |
+| 409 | Conflict with current state: ineligible cancellation, unavailable stock, invalid transition |
+| 402 | Payment declined |
+
+Every error body has an `error` string, because the frontend's `ApiError`
+reads that key. Field-level problems add `errors: {field: [messages]}`.
+
+### Serializers — the JSON contract
+
+Plain functions returning dicts. Two things to respect:
+
+- **Decimals are strings** (`f"{amount:.2f}"`), never floats. Money must
+  not pick up binary rounding on the way to the browser.
+- **Send derived state the UI would otherwise have to infer.**
+  `is_cancellable`, `status_display` and `allowed_transitions` are
+  computed server-side so the UI cannot disagree with the server about
+  what is possible.
+
+Never expose a secret or a credential. Payments store only the last four
+digits of a card; the full number is never persisted.
+
+### Authorization
+
+Use the decorators from `config/http.py`, and apply them to the view, not
+the URL:
+
+```python
+@require_GET
+@staff_required_api          # 401 anonymous, 403 customer
+def sales_report(request):
+    ...
+```
+
+Scope every customer-facing query to the caller. `orders/views.py`
+`_orders_for_request` is the pattern: an authenticated customer sees the
+orders on their account plus their own guest orders from this session,
+and nothing else. Never trust an id from the request to imply ownership.
+
+A subtlety worth knowing: `django.contrib.auth.login()` cycles the
+session key, and the cart and guest orders are keyed by it. The login and
+registration endpoints therefore call `reassign_cart_session` and
+`claim_session_orders`. If you add anything else keyed by session, hand it
+over there too.
+
+---
+
+## 3. The frontend, layer by layer
+
+### `api.ts` — one way to call the server
+
+It adds `Accept`/`Content-Type`, fetches and caches the CSRF token for
+writes, and converts any non-2xx response into a typed `ApiError`
+carrying `status` and the parsed `body`. Add a thin function per
+endpoint; never call `fetch` from a component.
+
+### `hooks/` — the data layer
+
+Every server interaction is a TanStack Query hook. Components get data,
+loading and error state from a hook and never manage it themselves.
+
+- **Reads are queries**, keyed by a shared key from the `queryKeys` /
+  `adminKeys` objects.
+- **Writes are mutations** that invalidate exactly the keys they affect,
+  so every screen showing that data updates at once. Cancelling an order
+  invalidates orders *and* books, because releasing stock changes the
+  catalogue.
+- **Queries are typed with their error:** `useQuery<BookResponse, ApiError>`
+  lets a component branch on `error.status === 404` without a cast.
+
+```ts
+export function useCancelOrder() {
+  const queryClient = useQueryClient();
+
+  return useMutation<OrderResponse, ApiError, { orderId: number; reason?: string }>({
+    mutationFn: ({ orderId, reason }) => cancelOrder(orderId, reason ?? ""),
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.order(data.order.id), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.orders() });
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+    },
+  });
+}
+```
+
+Hook files are grouped by area: `useBookStore.ts` (books, cart, orders,
+payment), `useAuth.ts`, `useReviews.ts`, `useAdmin.ts`.
+
+### `types.ts` — the contract in TypeScript
+
+One interface per payload, matching the serializer. When you change a
+serializer, change the interface in the same commit; `npm run build` runs
+`tsc --noEmit` first, so a mismatch fails the build instead of the
+browser.
+
+Payload types used as query-string parameters are declared as `type`
+aliases rather than `interface`, because only an object type alias gets
+the implicit index signature the query-string builder needs.
+
+### Pages and components
+
+Pages own form state and routing; shared presentation lives in
+`components/`. Server-driven state is read from hooks, not duplicated in
+`useState`.
+
+Conventions worth copying:
+
+- Render the four states: pending, error, empty and loaded. Every page
+  here does.
+- Show the server's message on failure (`errorMessage`, `fieldError`
+  from `errors.ts`) rather than a generic "something went wrong".
+- When a write is refused with 409, show the reason and refetch, so the
+  UI corrects itself instead of arguing with the server.
+- Keep interactive controls real controls: `StarRating` renders radio
+  inputs, so it works with a keyboard.
+- Charts and figures: a single number is a stat tile, not a chart. Use
+  one hue for a single measure, label the marks directly, keep grid and
+  axes recessive, and provide a table view beside any chart.
+
+---
+
+## 4. Adding a feature, end to end
+
+Say the issue is "customers can keep a wishlist".
+
+**1. Branch from `main`.**
+
+```bash
+git checkout main && git pull
+git checkout -b feature/wishlist-<yourname>
+```
+
+**2. Decide where it lives.** A new concern gets a new app; an extension
+of an existing concern goes in that app.
+
+```bash
+cd backend && python manage.py startapp wishlist
+```
+
+Register it in `INSTALLED_APPS` and mount it in `config/urls.py`.
+
+**3. Model it.** Fields, `Meta.ordering`, and the constraints that make
+bad data impossible. Then:
+
+```bash
+python manage.py makemigrations wishlist
+```
+
+Review the generated migration and rename it to something readable. If
+existing rows need values for a new field, add a data migration — see
+`orders/migrations/0004_backfill_paid_orders.py`.
+
+**4. Write the service**, if there are rules worth naming. Return
+`(result, error)` or an outcome object; wrap multi-row work in
+`transaction.atomic` and `select_for_update` what you decide on.
+
+**5. Serialize it.** Strings for decimals, derived flags the UI needs.
+
+**6. Write the view and URL.** Use `read_json`, `json_error` and the
+authorization decorators. Scope queries to the caller.
+
+**7. Test it.** In `wishlist/tests.py`, name the test after the behaviour
+and the requirement it covers:
+
+```python
+class WishlistTests(TestCase):
+    """Issue #NN / OBS-F-0NN: customers keep a wishlist."""
+
+    def test_customer_can_only_see_their_own_wishlist(self):
+        ...
+```
+
+Cover the happy path, each invalid input, and the authorization boundary
+(anonymous, another customer, administrator). Run:
+
+```bash
+python manage.py test --settings=config.settings_test
+python manage.py makemigrations --check --dry-run --settings=config.settings_test
+```
+
+**8. Add the frontend**, in this order: `types.ts` → `api.ts` → a hook →
+the page. Then:
+
+```bash
+cd frontend && npm run typecheck && npm test && npm run build
+```
+
+**9. Verify it running**, not just under test. `scripts/smoke_test.py`
+shows how to drive the API over HTTP against a throwaway database.
+
+**10. Commit in logical pieces** with a message that says *why*, not just
+what:
+
+```
+feat(wishlist): let customers save books for later (#NN)
+
+Implements OBS-F-0NN. ...
+
+- Why a unique (user, book) constraint: a wishlist is a set, and the
+  database should say so.
+```
+
+**11. Open a pull request** that references the issue (`Closes #NN`),
+lists what was implemented, and records the test results. Record
+validation evidence for test-case issues in `Docs/Validation_Evidence.md`.
+
+---
+
+## 5. Conventions checklist
+
+Before you open a pull request:
+
+- [ ] No new `os.environ` read outside `config/env.py`; no secret in the repo
+- [ ] Invariants expressed as database constraints, not only in Python
+- [ ] Business rules in `services.py`, HTTP concerns in `views.py`
+- [ ] Multi-row writes wrapped in a transaction, with rows locked before deciding
+- [ ] Every customer-facing query scoped to the caller
+- [ ] Admin-only views decorated with `staff_required_api`
+- [ ] Money serialized as strings with two decimals
+- [ ] Error responses carry an `error` key; field errors carry `errors`
+- [ ] `types.ts` matches the serializer; every API call goes through a hook
+- [ ] Pages render pending, error, empty and loaded states
+- [ ] Tests cover the happy path, invalid input and the authorization boundary
+- [ ] `python manage.py test --settings=config.settings_test` passes
+- [ ] `makemigrations --check --dry-run` reports no changes
+- [ ] `npm run typecheck`, `npm test` and `npm run build` pass
+- [ ] Docs updated: `README.md` for setup or endpoints, this file for
+      conventions, `Docs/Validation_Evidence.md` for test evidence
+
+## 6. Where to look for an example
+
+| If you are adding… | Read |
+|---|---|
+| A read-only endpoint with filters | `books/views.py` |
+| Session-scoped state | `cart/` |
+| A multi-step flow with locking | `orders/services.py`, `payments/services.py` |
+| A model owned by a customer | `reviews/` |
+| An administrator-only area | `administration/` |
+| A scheduled job with an audit trail | `operations/` |
+| A form-backed write with field errors | `administration/forms.py` + `views_books.py` |
+| A page with a form and mutations | `frontend/src/pages/admin/AdminBooksPage.tsx` |
+| A page that lists and acts on items | `frontend/src/pages/OrdersPage.tsx` |
+| A figure or report | `frontend/src/pages/admin/AdminReportsPage.tsx` |

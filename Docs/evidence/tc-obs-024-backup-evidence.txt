@@ -1,0 +1,103 @@
+=== manage.py backup_data --trigger scheduled ===
+Backup run 1 succeeded in 0.077s: 13 records (7169 bytes) written to <backup-dir>/backups/backup-20261026T162551Z-1
+  books.book: 7 records
+  orders.order: 2 records
+  orders.orderitem: 2 records
+  payments.payment: 2 records
+
+=== manage.py verify_backups ===
+Last successful backup was 0.00 hours ago (limit 24 hours).
+
+Recent backup executions:
+  #1 SUCCESS 2026-10-26T16:25:51.678102+00:00 13 records -> <backup-dir>/backups/backup-20261026T162551Z-1
+Backup schedule satisfies OBS-NF-006 (at least one successful backup every 24 hours).
+
+=== backup directory contents ===
+total 32
+drwxrwxr-x 2 puneeth puneeth 4096 Oct 26 21:55 .
+drwxrwxr-x 3 puneeth puneeth 4096 Oct 26 21:55 ..
+-rw-rw-r-- 1 puneeth puneeth 4460 Oct 26 21:55 books.book.json
+-rw-rw-r-- 1 puneeth puneeth  883 Oct 26 21:55 manifest.json
+-rw-rw-r-- 1 puneeth puneeth  349 Oct 26 21:55 orders.orderitem.json
+-rw-rw-r-- 1 puneeth puneeth  848 Oct 26 21:55 orders.order.json
+-rw-rw-r-- 1 puneeth puneeth  629 Oct 26 21:55 payments.payment.json
+
+=== manifest.json ===
+{
+  "created_at": "2026-10-26T16:25:51.678102+00:00",
+  "backup_run_id": 1,
+  "trigger": "SCHEDULED",
+  "datasets": {
+    "books.book": {
+      "file": "books.book.json",
+      "records": 7,
+      "bytes": 4460,
+      "sha256": "75b8d03ef9d1c8749f8230a969d5ab73ec763c660744e906a0dbd017ceeb22f3"
+    },
+    "orders.order": {
+      "file": "orders.order.json",
+      "records": 2,
+      "bytes": 848,
+      "sha256": "52b899639fa6592da08d3b86a09ca3f14cb35573593269b78c2ced2d4034ffae"
+    },
+    "orders.orderitem": {
+      "file": "orders.orderitem.json",
+      "records": 2,
+      "bytes": 349,
+      "sha256": "3832feffe61bf602116504ef330958498b9ff78612ff346390dec5a3a62f11a1"
+    },
+    "payments.payment": {
+      "file": "payments.payment.json",
+      "records": 2,
+      "bytes": 629,
+      "sha256": "743a4254107f20806b4046d38e4f8f26c86d59ddb8c07582fbcc5ee3d5f1d1bc"
+    }
+  }
+}
+=== GET /api/admin/backups/ (as administrator) ===
+{
+  "freshness": {
+    "fresh": true,
+    "max_age_hours": 24,
+    "age_hours": 0.003,
+    "detail": "Last successful backup was 0.00 hours ago (limit 24 hours).",
+    "latest": {
+      "id": 1,
+      "status": "SUCCESS",
+      "trigger": "SCHEDULED",
+      "started_at": "2026-10-26T16:25:51.678102+00:00",
+      "finished_at": "2026-10-26T16:25:51.755460+00:00",
+      "duration_seconds": 0.077,
+      "location": "<backup-dir>/backups/backup-20261026T162551Z-1",
+      "size_bytes": 7169,
+      "record_counts": {
+        "books.book": 7,
+        "orders.order": 2,
+        "orders.orderitem": 2,
+        "payments.payment": 2
+      },
+      "total_records": 13,
+      "error_message": ""
+    }
+  },
+  "runs": [
+    {
+      "id": 1,
+      "status": "SUCCESS",
+      "trigger": "SCHEDULED",
+      "started_at": "2026-10-26T16:25:51.678102+00:00",
+      "finished_at": "2026-10-26T16:25:51.755460+00:00",
+      "duration_seconds": 0.077,
+      "location": "<backup-dir>/backups/backup-20261026T162551Z-1",
+      "size_bytes": 7169,
+      "record_counts": {
+        "books.book": 7,
+        "orders.order": 2,
+        "orders.orderitem": 2,
+        "payments.payment": 2
+      },
+      "total_records": 13,
+      "error_message": ""
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+
+== Issue #10: order placement, history and cancellation ==
+  [OK ] register customer -> 201
+  book under test: Clean Code (stock 12)
+  [OK ] add to cart -> 200
+  [OK ] place order -> 201
+  [OK ] new order is pending -> PENDING
+  [OK ] pending order is cancellable -> True
+  [OK ] pay order -> 200
+  [OK ] order confirmed -> CONFIRMED
+  [OK ] history lists the order -> 1
+  [OK ] history shows paid state -> True
+  [OK ] stock reserved by payment -> 10
+  [OK ] cancel confirmed order -> 200
+  [OK ] order cancelled -> CANCELLED
+  [OK ] refund flagged -> True
+  [OK ] stock released by cancellation -> 12
+  [OK ] second cancellation refused -> 409
+
+== Issue #11: book reviews ==
+  [OK ] submit review -> 201
+  [OK ] average rating -> 5.0
+  [OK ] duplicate review refused -> 409
+  [OK ] invalid rating refused -> 400
+  [OK ] edit own review -> 200
+  [OK ] reviews are public -> 200
+  [OK ] guest cannot review -> False
+  [OK ] review visible to guest -> 1
+
+== Issues #12 and #24: administrator-only access ==
+  [OK ] customer blocked from /api/admin/books/ -> 403
+  [OK ] guest blocked from /api/admin/books/ -> 401
+  [OK ] customer blocked from /api/admin/orders/ -> 403
+  [OK ] guest blocked from /api/admin/orders/ -> 401
+  [OK ] customer blocked from /api/admin/customers/ -> 403
+  [OK ] guest blocked from /api/admin/customers/ -> 401
+  [OK ] customer blocked from /api/admin/reports/sales/ -> 403
+  [OK ] guest blocked from /api/admin/reports/sales/ -> 401
+  [OK ] customer blocked from /api/admin/backups/ -> 403
+  [OK ] guest blocked from /api/admin/backups/ -> 401
+  [OK ] admin login -> 200
+
+== Issue #12: catalogue management ==
+  [OK ] create book -> 201
+  [OK ] isbn normalized -> 9781617294136
+  [OK ] duplicate isbn refused -> 400
+  [OK ] bad isbn refused -> 400
+  [OK ] update stock -> 12
+  [OK ] title preserved by partial update -> Smoke Test Title
+  [OK ] delete unordered book -> 200
+  [OK ] delete ordered book refused -> 409
+
+== Issue #12: order management ==
+  [OK ] add to cart again -> 200
+  [OK ] admin sees all orders -> True
+  [OK ] skipping fulfilment refused -> 409
+  [OK ] advance to PROCESSING -> 200
+  [OK ] advance to SHIPPED -> 200
+  [OK ] advance to DELIVERED -> 200
+  [OK ] delivered order cannot be cancelled -> 409
+  [OK ] customer cannot cancel delivered order -> 409
+
+== Issue #24: customers and sales reports ==
+  [OK ] customer list -> 200
+  [OK ] order count aggregated -> 2
+  [OK ] own account cannot be deactivated -> 400
+  [OK ] deactivate customer -> 200
+  [OK ] deactivated customer cannot log in -> 401
+  [OK ] reactivate customer -> 200
+  [OK ] sales report -> 200
+  revenue=42.50 orders=1 aov=42.50 items=1
+  [OK ] cancelled order excluded from revenue -> 1
+  [OK ] bad period refused -> 400
+
+== Issue #18: backups ==
+  [OK ] backup endpoint -> 200
+  fresh=False runs=0
+
+ALL SMOKE CHECKS PASSED

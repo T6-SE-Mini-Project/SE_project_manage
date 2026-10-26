@@ -1,0 +1,64 @@
+{
+  "users": 500,
+  "requests_per_user": 1,
+  "total_requests": 2500,
+  "failed_requests": 490,
+  "wall_seconds": 30.003,
+  "throughput_rps": 83.32,
+  "threshold_seconds": 3.0,
+  "percentile": 95,
+  "percentile_seconds": 3.6417,
+  "mean_seconds": 1.6899,
+  "median_seconds": 1.5043,
+  "min_seconds": 0.0384,
+  "max_seconds": 5.8516,
+  "within_threshold": 2262,
+  "within_threshold_ratio": 0.9048,
+  "passed": false,
+  "by_label": {
+    "catalogue": {
+      "requests": 500,
+      "failed": 0,
+      "mean_seconds": 1.3415,
+      "max_seconds": 2.4425,
+      "p95_seconds": 2.1674
+    },
+    "search": {
+      "requests": 500,
+      "failed": 0,
+      "mean_seconds": 1.3102,
+      "max_seconds": 1.847,
+      "p95_seconds": 1.7586
+    },
+    "filter": {
+      "requests": 500,
+      "failed": 0,
+      "mean_seconds": 1.5258,
+      "max_seconds": 1.9183,
+      "p95_seconds": 1.8447
+    },
+    "categories": {
+      "requests": 500,
+      "failed": 0,
+      "mean_seconds": 1.7832,
+      "max_seconds": 5.7215,
+      "p95_seconds": 3.2631
+    },
+    "add_to_cart": {
+      "requests": 500,
+      "failed": 490,
+      "mean_seconds": 2.4885,
+      "max_seconds": 5.8516,
+      "p95_seconds": 4.7614
+    }
+  },
+  "errors": {
+    "HTTP 500": 490
+  },
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+  },
+  "base_url": "http://127.0.0.1:8099",
+  "started_at": "2026-10-26T21:40:22+0530"
+}
