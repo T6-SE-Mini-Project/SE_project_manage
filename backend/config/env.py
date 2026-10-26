@@ -143,7 +143,16 @@ HTTPS_ENABLED = env_bool("HTTPS_ENABLED", default=False)
 # Directory that ``manage.py backup_data`` writes order and inventory
 # backups into. Point this at a mounted volume in production so the
 # backups outlive the container.
-BACKUP_DIR = Path(env("BACKUP_DIR", default=str(BASE_DIR / "backups")))
+#
+# A relative value is resolved against BASE_DIR (the backend directory),
+# not the current working directory, so "BACKUP_DIR=backups" always means
+# backend/backups no matter where manage.py is run from.
+def _backup_dir():
+    configured = Path(env("BACKUP_DIR", default="backups"))
+    return configured if configured.is_absolute() else BASE_DIR / configured
+
+
+BACKUP_DIR = _backup_dir()
 
 # How many days of backup artifacts to keep on disk. The BackupRun
 # execution records are kept regardless, so the schedule stays auditable
