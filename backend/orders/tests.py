@@ -303,3 +303,340 @@ class AvailabilityLogicTests(TestCase):
         problems = _availability_problems([item], {7: book})
 
         self.assertEqual(problems, [])
+
+
+SUCCESS_CARD = "4242424242424242"
+
+
+def card_data(**overrides):
+    data = {
+        "card_number": SUCCESS_CARD,
+        "cvc": "123",
+        "expiry_month": 12,
+        "expiry_year": 2099,
+    }
+    data.update(overrides)
+    return data
+
+
+class OrderHistoryTests(TestCase):
+    """Issue #10 / OBS-F-014: customers can view their order history."""
+
+    def setUp(self):
+        self.book = Book.objects.create(**book_data())
+        self.user = get_user_model().objects.create_user(
+            username="historycustomer",
+            email="history@example.com",
+            password="HistoryPass123",
+        )
+
+    def add_to_cart(self, book, quantity=1):
+        response = self.client.post(
+            reverse("cart_item_add"),
+            data=json.dumps({"book_id": book.pk, "quantity": quantity}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def place_order(self):
+        response = self.client.post(reverse("order_collection"))
+        self.assertEqual(response.status_code, 201)
+        return response.json()["order"]
+
+    def history(self, client=None):
+        response = (client or self.client).get(reverse("order_collection"))
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_history_lists_the_relevant_information_for_each_order(self):
+        self.add_to_cart(self.book, quantity=2)
+        placed = self.place_order()
+
+        body = self.history()
+
+        self.assertEqual(body["count"], 1)
+        order = body["orders"][0]
+
+        self.assertEqual(order["id"], placed["id"])
+        self.assertEqual(order["status"], "PENDING")
+        self.assertEqual(order["status_display"], "Pending payment")
+        self.assertEqual(order["total_amount"], "25.00")
+        self.assertEqual(order["item_count"], 2)
+        self.assertTrue(order["created_at"])
+        self.assertTrue(order["is_cancellable"])
+        self.assertFalse(order["is_cancelled"])
+        self.assertFalse(order["is_paid"])
+
+        item = order["items"][0]
+        self.assertEqual(item["title"], self.book.title)
+        self.assertEqual(item["quantity"], 2)
+        self.assertEqual(item["unit_price"], "12.50")
+        self.assertEqual(item["line_total"], "25.00")
+
+    def test_history_is_ordered_newest_first(self):
+        self.add_to_cart(self.book, quantity=1)
+        first = self.place_order()
+        self.add_to_cart(self.book, quantity=1)
+        second = self.place_order()
+
+        body = self.history()
+
+        self.assertEqual(
+            [order["id"] for order in body["orders"]],
+            [second["id"], first["id"]],
+        )
+
+    def test_authenticated_history_follows_the_account_across_sessions(self):
+        self.client.force_login(self.user)
+        self.add_to_cart(self.book, quantity=1)
+        placed = self.place_order()
+
+        # A new browser session for the same account must still show the
+        # order: history is scoped to the customer, not the session.
+        other_client = Client()
+        other_client.force_login(self.user)
+
+        body = self.history(other_client)
+
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["orders"][0]["id"], placed["id"])
+
+    def test_guest_order_is_claimed_when_the_customer_logs_in(self):
+        # Logging in cycles the session key, so the login endpoint hands
+        # the guest order over to the account it belongs to.
+        self.add_to_cart(self.book, quantity=1)
+        placed = self.place_order()
+
+        response = self.client.post(
+            reverse("api_login"),
+            data=json.dumps(
+                {
+                    "username": "historycustomer",
+                    "password": "HistoryPass123",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        body = self.history()
+
+        self.assertEqual([o["id"] for o in body["orders"]], [placed["id"]])
+        self.assertEqual(
+            Order.objects.get(pk=placed["id"]).user_id,
+            self.user.pk,
+        )
+
+    def test_history_excludes_other_customers_orders(self):
+        self.client.force_login(self.user)
+        self.add_to_cart(self.book, quantity=1)
+        self.place_order()
+
+        other_user = get_user_model().objects.create_user(
+            username="othercustomer",
+            email="other@example.com",
+            password="OtherPass123",
+        )
+        other_client = Client()
+        other_client.force_login(other_user)
+
+        body = self.history(other_client)
+
+        self.assertEqual(body["count"], 0)
+        self.assertEqual(body["orders"], [])
+
+    def test_paid_order_history_reports_payment_state(self):
+        self.add_to_cart(self.book, quantity=1)
+        placed = self.place_order()
+
+        response = self.client.post(
+            reverse("payment_create"),
+            data=json.dumps(card_data(order_id=placed["id"])),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        order = self.history()["orders"][0]
+
+        self.assertEqual(order["status"], "CONFIRMED")
+        self.assertTrue(order["is_paid"])
+        self.assertTrue(order["paid_at"])
+        self.assertTrue(order["is_cancellable"])
+
+
+class OrderCancellationTests(TestCase):
+    """Issue #10 / OBS-F-015: cancellation of eligible orders only."""
+
+    def setUp(self):
+        self.book = Book.objects.create(**book_data())
+
+    def add_to_cart(self, book, quantity=1):
+        response = self.client.post(
+            reverse("cart_item_add"),
+            data=json.dumps({"book_id": book.pk, "quantity": quantity}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def place_order(self, quantity=1):
+        self.add_to_cart(self.book, quantity=quantity)
+        response = self.client.post(reverse("order_collection"))
+        self.assertEqual(response.status_code, 201)
+        return response.json()["order"]
+
+    def pay(self, order_id):
+        response = self.client.post(
+            reverse("payment_create"),
+            data=json.dumps(card_data(order_id=order_id)),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json()["order"]
+
+    def cancel(self, order_id, reason=None):
+        payload = {} if reason is None else {"reason": reason}
+        return self.client.post(
+            reverse("order_cancel", args=[order_id]),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_pending_order_can_be_cancelled(self):
+        placed = self.place_order()
+
+        response = self.cancel(placed["id"], reason="Changed my mind")
+
+        self.assertEqual(response.status_code, 200)
+        order = response.json()["order"]
+
+        self.assertEqual(order["status"], "CANCELLED")
+        self.assertTrue(order["is_cancelled"])
+        self.assertFalse(order["is_cancellable"])
+        self.assertEqual(order["cancellation_reason"], "Changed my mind")
+        self.assertTrue(order["cancelled_at"])
+        self.assertFalse(order["refund_due"])
+
+        self.assertEqual(
+            Order.objects.get(pk=placed["id"]).status,
+            Order.STATUS_CANCELLED,
+        )
+
+    def test_cancelling_a_pending_order_leaves_stock_untouched(self):
+        # A pending order never reserved stock, so cancelling it must not
+        # add stock back.
+        placed = self.place_order(quantity=2)
+
+        self.assertEqual(self.cancel(placed["id"]).status_code, 200)
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.stock_quantity, 5)
+
+    def test_cancelling_a_paid_order_returns_its_stock(self):
+        placed = self.place_order(quantity=2)
+        self.pay(placed["id"])
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.stock_quantity, 3)
+
+        response = self.cancel(placed["id"])
+
+        self.assertEqual(response.status_code, 200)
+        order = response.json()["order"]
+        self.assertEqual(order["status"], "CANCELLED")
+        # The customer paid, so a refund is owed.
+        self.assertTrue(order["refund_due"])
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.stock_quantity, 5)
+
+    def test_cancelling_twice_does_not_release_stock_twice(self):
+        placed = self.place_order(quantity=2)
+        self.pay(placed["id"])
+
+        self.assertEqual(self.cancel(placed["id"]).status_code, 200)
+        second = self.cancel(placed["id"])
+
+        self.assertEqual(second.status_code, 409)
+        self.assertIn("already been cancelled", second.json()["error"])
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.stock_quantity, 5)
+
+    def test_shipped_order_cannot_be_cancelled(self):
+        placed = self.place_order()
+        self.pay(placed["id"])
+
+        order = Order.objects.get(pk=placed["id"])
+        order.status = Order.STATUS_SHIPPED
+        order.save(update_fields=["status"])
+
+        response = self.cancel(placed["id"])
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("can no longer be cancelled", response.json()["error"])
+        self.assertEqual(
+            Order.objects.get(pk=placed["id"]).status,
+            Order.STATUS_SHIPPED,
+        )
+
+    def test_delivered_order_cannot_be_cancelled(self):
+        placed = self.place_order()
+        self.pay(placed["id"])
+
+        order = Order.objects.get(pk=placed["id"])
+        order.status = Order.STATUS_DELIVERED
+        order.save(update_fields=["status"])
+
+        self.assertEqual(self.cancel(placed["id"]).status_code, 409)
+
+    def test_ineligible_cancellation_reports_the_current_order(self):
+        placed = self.place_order()
+        self.pay(placed["id"])
+
+        order = Order.objects.get(pk=placed["id"])
+        order.status = Order.STATUS_SHIPPED
+        order.save(update_fields=["status"])
+
+        body = self.cancel(placed["id"]).json()
+
+        self.assertEqual(body["order"]["status"], "SHIPPED")
+        self.assertFalse(body["order"]["is_cancellable"])
+
+    def test_another_session_cannot_cancel_the_order(self):
+        placed = self.place_order()
+
+        other_client = Client()
+        response = other_client.post(
+            reverse("order_cancel", args=[placed["id"]]),
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            Order.objects.get(pk=placed["id"]).status,
+            Order.STATUS_PENDING,
+        )
+
+    def test_unknown_order_cancellation_returns_404(self):
+        response = self.cancel(999999)
+        self.assertEqual(response.status_code, 404)
+
+    def test_cancellation_requires_post(self):
+        placed = self.place_order()
+
+        response = self.client.get(
+            reverse("order_cancel", args=[placed["id"]])
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_default_reason_is_recorded_when_none_is_given(self):
+        placed = self.place_order()
+
+        body = self.cancel(placed["id"]).json()
+
+        self.assertEqual(
+            body["order"]["cancellation_reason"],
+            "Cancelled by the customer.",
+        )

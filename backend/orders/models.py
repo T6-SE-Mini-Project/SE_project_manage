@@ -7,22 +7,54 @@ from django.db import models
 class Order(models.Model):
     """A customer order placed from a shopping cart.
 
-    Lifecycle (issues #8 and #9):
+    Lifecycle (issues #8, #9, #10 and #12):
 
-    - ``PENDING``   — the order was placed and passed the availability
-      check, but payment has not succeeded yet. A failed payment attempt
-      leaves the order pending so the customer can retry.
-    - ``CONFIRMED`` — payment succeeded; stock is reserved and the order
-      is confirmed.
+    - ``PENDING``    — placed and past the availability check, but not
+      paid yet. A failed payment attempt leaves the order pending so the
+      customer can retry.
+    - ``CONFIRMED``  — payment succeeded; stock is reserved.
+    - ``PROCESSING`` — an administrator started preparing the order.
+    - ``SHIPPED``    — dispatched to the customer.
+    - ``DELIVERED``  — the final successful state.
+    - ``CANCELLED``  — cancelled by the customer (issue #10) or by an
+      administrator (issue #12). Reserved stock is returned to the
+      catalogue when an order is cancelled.
+
+    Only ``PENDING``, ``CONFIRMED`` and ``PROCESSING`` orders can be
+    cancelled: once an order has shipped, cancellation is no longer a
+    customer-side operation.
     """
 
     STATUS_PENDING = "PENDING"
     STATUS_CONFIRMED = "CONFIRMED"
+    STATUS_PROCESSING = "PROCESSING"
+    STATUS_SHIPPED = "SHIPPED"
+    STATUS_DELIVERED = "DELIVERED"
+    STATUS_CANCELLED = "CANCELLED"
 
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending payment"),
         (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_SHIPPED, "Shipped"),
+        (STATUS_DELIVERED, "Delivered"),
+        (STATUS_CANCELLED, "Cancelled"),
     ]
+
+    #: Statuses a customer or administrator may still cancel from.
+    CANCELLABLE_STATUSES = frozenset(
+        {STATUS_PENDING, STATUS_CONFIRMED, STATUS_PROCESSING}
+    )
+
+    #: Statuses that count as revenue in the sales report (issue #24).
+    REVENUE_STATUSES = frozenset(
+        {
+            STATUS_CONFIRMED,
+            STATUS_PROCESSING,
+            STATUS_SHIPPED,
+            STATUS_DELIVERED,
+        }
+    )
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -39,6 +71,15 @@ class Order(models.Model):
         db_index=True,
     )
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    # Set when a payment succeeds, so order history can show when the
+    # order was paid and cancellation can tell whether a refund is owed.
+    paid_at = models.DateTimeField(blank=True, null=True)
+    # True while this order holds catalogue stock. Stock is reserved on
+    # successful payment and released on cancellation; the flag makes the
+    # release happen exactly once.
+    stock_reserved = models.BooleanField(default=False)
+    cancelled_at = models.DateTimeField(blank=True, null=True)
+    cancellation_reason = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -56,12 +97,40 @@ class Order(models.Model):
 
     @property
     def is_confirmed(self):
-        return self.status == self.STATUS_CONFIRMED
+        """True once payment succeeded, including later fulfilment states."""
+        return self.status in {
+            self.STATUS_CONFIRMED,
+            self.STATUS_PROCESSING,
+            self.STATUS_SHIPPED,
+            self.STATUS_DELIVERED,
+        }
 
     @property
     def is_payable(self):
         """Only pending orders can receive a payment attempt."""
         return self.status == self.STATUS_PENDING
+
+    @property
+    def is_cancelled(self):
+        return self.status == self.STATUS_CANCELLED
+
+    @property
+    def is_paid(self):
+        return self.paid_at is not None
+
+    @property
+    def is_cancellable(self):
+        """Whether this order still satisfies the cancellation conditions."""
+        return self.status in self.CANCELLABLE_STATUSES
+
+    @property
+    def refund_due(self):
+        """A cancelled order that was already paid needs a refund."""
+        return self.is_cancelled and self.is_paid
+
+    @property
+    def status_display(self):
+        return self.get_status_display()
 
 
 class OrderItem(models.Model):

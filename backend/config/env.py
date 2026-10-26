@@ -134,8 +134,3 @@ CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", [])
 # HTTPS-only production security settings in config.settings.
 HTTPS_ENABLED = env_bool("HTTPS_ENABLED", default=False)
 
-
-# --- Production / cloud ------------------------------------------------------
-HTTPS_ENABLED = env_bool("DJANGO_HTTPS", default=False)
-
-CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])

@@ -10,8 +10,9 @@ Flow for ``process_order_payment``:
    the ordered books. If stock no longer covers an order line, the
    attempt is recorded as a failed payment and nothing is charged.
 4. The gateway charge is attempted. On success the books' stock is
-   decremented atomically, the order becomes ``CONFIRMED`` and the
-   customer's cart is emptied. On failure only the failed-payment record
+   decremented atomically, the order becomes ``CONFIRMED`` (recording
+   ``paid_at`` and ``stock_reserved``) and the customer's cart is
+   emptied. On failure only the failed-payment record
    is written; the order stays ``PENDING`` and stock and cart are
    untouched, so the payment can be retried.
 
@@ -224,14 +225,25 @@ def process_order_payment(order, card_data, user=None):
             status=402,
         )
 
-    # Reserve the stock and confirm the order.
+    # Reserve the stock and confirm the order. ``stock_reserved`` records
+    # that this order now holds catalogue stock, so cancelling it later
+    # (issue #10) releases exactly that stock once.
     for item in order.items.all():
         Book.objects.filter(pk=item.book_id).update(
             stock_quantity=F("stock_quantity") - item.quantity
         )
 
     order.status = Order.STATUS_CONFIRMED
-    order.save(update_fields=["status", "updated_at"])
+    order.paid_at = timezone.now()
+    order.stock_reserved = True
+    order.save(
+        update_fields=[
+            "status",
+            "paid_at",
+            "stock_reserved",
+            "updated_at",
+        ]
+    )
 
     payment = _record_payment(
         order,

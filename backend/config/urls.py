@@ -7,6 +7,7 @@ from .views import csrf_token
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/csrf/", csrf_token, name="csrf_token"),
+    path("api/auth/", include("accounts.api_urls")),
     path("api/books/", include("books.urls")),
     path("api/cart/", include("cart.urls")),
     path("api/orders/", include("orders.urls")),

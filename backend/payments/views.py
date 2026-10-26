@@ -1,8 +1,7 @@
-import json
-
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 
+from config.http import json_error, read_json
 from orders.models import Order
 from orders.serializers import serialize_order
 
@@ -10,28 +9,10 @@ from .serializers import serialize_payment
 from .services import process_order_payment
 
 
-def _read_json(request):
-    try:
-        data = json.loads(request.body or b"{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None, JsonResponse(
-            {"error": "Invalid JSON body."},
-            status=400,
-        )
-
-    if not isinstance(data, dict):
-        return None, JsonResponse(
-            {"error": "JSON body must be an object."},
-            status=400,
-        )
-
-    return data, None
-
-
 @require_POST
 def payment_create(request):
     """Process payment for an order and confirm it on success."""
-    data, error_response = _read_json(request)
+    data, error_response = read_json(request)
     if error_response is not None:
         return error_response
 
@@ -40,7 +21,7 @@ def payment_create(request):
         order_id = int(order_id)
 
     if not isinstance(order_id, int):
-        return JsonResponse({"error": "order_id is required."}, status=400)
+        return json_error("order_id is required.", 400)
 
     session_key = request.session.session_key or ""
     order = (
@@ -50,7 +31,7 @@ def payment_create(request):
     )
 
     if order is None:
-        return JsonResponse({"error": "Order not found."}, status=404)
+        return json_error("Order not found.", 404)
 
     user = request.user if request.user.is_authenticated else None
     outcome = process_order_payment(order, data, user=user)
