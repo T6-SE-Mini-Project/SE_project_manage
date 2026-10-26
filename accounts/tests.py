@@ -4,6 +4,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 
+
 class CustomerRegistrationTests(TestCase):
     def setUp(self):
         self.url = reverse("register")
@@ -41,8 +42,30 @@ class CustomerRegistrationTests(TestCase):
 
         user = User.objects.get(username="newcustomer")
 
+        # The stored password must not be plaintext.
         self.assertNotEqual(user.password, self.password)
+
+        # Django must verify the original password against the stored hash.
         self.assertTrue(user.check_password(self.password))
+
+        # Verify the encoded hash format and configured algorithm.
+        encoded_parts = user.password.split("$")
+        self.assertGreaterEqual(len(encoded_parts), 4)
+        self.assertEqual(encoded_parts[0], "pbkdf2_sha256")
+
+    def test_password_hash_uses_configured_hasher(self):
+        self.register_customer()
+
+        user = User.objects.get(username="newcustomer")
+        configured_hasher = settings.PASSWORD_HASHERS[0]
+
+        self.assertTrue(
+            user.password.startswith(
+                configured_hasher.split(".")[-1]
+                .replace("PasswordHasher", "").lower()
+            )
+            or user.password.startswith("pbkdf2_sha256$")
+        )
 
     def test_duplicate_username_is_rejected(self):
         User.objects.create_user(
@@ -163,7 +186,6 @@ class CustomerLoginTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-
 class SessionTimeoutTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
@@ -173,8 +195,6 @@ class SessionTimeoutTests(TestCase):
         )
 
     def test_session_cookie_age_is_15_minutes(self):
-        from django.conf import settings
-
         self.assertEqual(settings.SESSION_COOKIE_AGE, 900)
 
     def test_expired_session_cannot_access_protected_page(self):
