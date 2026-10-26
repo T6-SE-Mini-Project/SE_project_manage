@@ -37,6 +37,8 @@ INSTALLED_APPS = [
     "orders",
     "payments",
     "reviews",
+    # Administrator API (catalogue, orders, customers, sales reports)
+    "administration",
     # Operational tasks: scheduled order and inventory backups
     "operations",
 ]

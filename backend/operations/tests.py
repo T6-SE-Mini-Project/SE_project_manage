@@ -11,8 +11,10 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
+from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import Client, TestCase, override_settings
+from django.urls import reverse
 from django.utils import timezone
 
 from books.models import Book
@@ -273,3 +275,48 @@ class BackupCommandTests(BackupTestCase):
         self.assertEqual(payload["latest"]["status"], "SUCCESS")
         self.assertEqual(len(payload["history"]), 1)
 
+
+@override_settings(BACKUP_MAX_AGE_HOURS=24)
+class BackupApiTests(BackupTestCase):
+    """Administrators can inspect the backup execution records."""
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        self.admin = User.objects.create_user(
+            username="backupadmin",
+            email="backupadmin@example.com",
+            password="BackupPass123",
+            is_staff=True,
+        )
+        self.customer = User.objects.create_user(
+            username="backupcustomer",
+            email="backupcustomer@example.com",
+            password="CustomerPass123",
+        )
+
+    def test_administrator_sees_runs_and_the_freshness_verdict(self):
+        run_backup(root=self.backup_dir, trigger=BackupRun.TRIGGER_SCHEDULED)
+
+        client = Client()
+        client.force_login(self.admin)
+        response = client.get(reverse("admin_backup_collection"))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+
+        self.assertTrue(body["freshness"]["fresh"])
+        self.assertEqual(body["freshness"]["max_age_hours"], 24)
+        self.assertEqual(len(body["runs"]), 1)
+        self.assertEqual(body["runs"][0]["status"], "SUCCESS")
+        self.assertEqual(body["runs"][0]["trigger"], "SCHEDULED")
+        self.assertEqual(body["runs"][0]["record_counts"]["orders.order"], 1)
+
+    def test_customers_cannot_inspect_backups(self):
+        client = Client()
+        client.force_login(self.customer)
+
+        self.assertEqual(
+            client.get(reverse("admin_backup_collection")).status_code,
+            403,
+        )
