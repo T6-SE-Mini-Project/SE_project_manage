@@ -8,8 +8,12 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  django:
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
 
     services:
       mysql:
@@ -35,7 +39,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: backend/requirements.txt
 
       - name: Install system dependencies
         run: |
