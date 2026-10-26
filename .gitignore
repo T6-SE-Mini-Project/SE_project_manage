@@ -11,3 +11,8 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 
+# Backup artifacts written by "manage.py backup_data" (issue #18)
+backend/backups/
+
+# Django collected static files
+backend/staticfiles/

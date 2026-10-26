@@ -24,6 +24,9 @@ DB_PORT                     MySQL port                                ``3306``
 SESSION_COOKIE_AGE          Session inactivity timeout (seconds)      ``900``
 CSRF_TRUSTED_ORIGINS        Comma-separated trusted CSRF origins      *(empty)*
 HTTPS_ENABLED               Terminate TLS in front of Django          ``false``
+BACKUP_DIR                  Where order/inventory backups are written ``<backend>/backups``
+BACKUP_RETENTION_DAYS       Days of backup artifacts to keep          ``14``
+BACKUP_MAX_AGE_HOURS        Maximum accepted age of a good backup     ``24``
 ==========================  ========================================  =====================
 
 Copy ``.env.example`` to ``.env`` and fill in the values for your machine.
@@ -134,3 +137,20 @@ CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", [])
 # HTTPS-only production security settings in config.settings.
 HTTPS_ENABLED = env_bool("HTTPS_ENABLED", default=False)
 
+
+# --- Backups (issue #18, OBS-NF-006) ------------------------------------------
+
+# Directory that ``manage.py backup_data`` writes order and inventory
+# backups into. Point this at a mounted volume in production so the
+# backups outlive the container.
+BACKUP_DIR = Path(env("BACKUP_DIR", default=str(BASE_DIR / "backups")))
+
+# How many days of backup artifacts to keep on disk. The BackupRun
+# execution records are kept regardless, so the schedule stays auditable
+# after old artifacts are rotated away.
+BACKUP_RETENTION_DAYS = env_int("BACKUP_RETENTION_DAYS", default=14)
+
+# OBS-NF-006 requires a backup at least once every 24 hours;
+# ``manage.py verify_backups`` fails when the newest successful backup is
+# older than this.
+BACKUP_MAX_AGE_HOURS = env_int("BACKUP_MAX_AGE_HOURS", default=24)

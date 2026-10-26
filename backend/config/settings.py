@@ -37,6 +37,8 @@ INSTALLED_APPS = [
     "orders",
     "payments",
     "reviews",
+    # Operational tasks: scheduled order and inventory backups
+    "operations",
 ]
 
 
@@ -130,6 +132,12 @@ CSRF_TRUSTED_ORIGINS = env.CSRF_TRUSTED_ORIGINS
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# Order and inventory backups (issue #18). See config/env.py.
+BACKUP_DIR = env.BACKUP_DIR
+BACKUP_RETENTION_DAYS = env.BACKUP_RETENTION_DAYS
+BACKUP_MAX_AGE_HOURS = env.BACKUP_MAX_AGE_HOURS
 
 
 # Session security: expire after SESSION_COOKIE_AGE seconds of inactivity
