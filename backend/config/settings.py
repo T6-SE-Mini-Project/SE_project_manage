@@ -2,30 +2,23 @@
 """
 Django settings for the Online Book Store project.
 Django version: 5.2.18
+
+All runtime values come from the central configuration module
+``config.env`` (which loads backend/.env). See backend/.env.example for
+the available variables.
 """
 
-import os
-from pathlib import Path
-from dotenv import load_dotenv
+from . import env
 
-# Base directory of the project
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Load environment variables from .env
-load_dotenv(BASE_DIR / ".env")
 
 # Security settings
 # Generate a unique key locally and place it in .env as DJANGO_SECRET_KEY.
-SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
+SECRET_KEY = env.SECRET_KEY
 
 # Development settings (disable DEBUG in production)
-DEBUG = os.getenv("DJANGO_DEBUG", "True").lower() == "true"
+DEBUG = env.DEBUG
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
-    if host.strip()
-]
+ALLOWED_HOSTS = env.ALLOWED_HOSTS
 
 
 # Installed applications
@@ -85,11 +78,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": os.environ["DB_NAME"],
-        "USER": os.environ["DB_USER"],
-        "PASSWORD": os.environ["DB_PASSWORD"],
-        "HOST": os.getenv("DB_HOST", "localhost"),
-        "PORT": os.getenv("DB_PORT", "3306"),
+        "NAME": env.DB_NAME,
+        "USER": env.DB_USER,
+        "PASSWORD": env.DB_PASSWORD,
+        "HOST": env.DB_HOST,
+        "PORT": env.DB_PORT,
         "OPTIONS": {
             "charset": "utf8mb4",
         },
@@ -126,14 +119,18 @@ USE_TZ = True
 
 # Static files
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+CSRF_TRUSTED_ORIGINS = env.CSRF_TRUSTED_ORIGINS
 
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
-# Session security: expire after 15 minutes of inactivity.
-SESSION_COOKIE_AGE = 900
+# Session security: expire after SESSION_COOKIE_AGE seconds of inactivity
+# (configured in config/env.py).
+SESSION_COOKIE_AGE = env.SESSION_COOKIE_AGE
 SESSION_SAVE_EVERY_REQUEST = True
 
 
