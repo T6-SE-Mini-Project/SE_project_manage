@@ -10,6 +10,7 @@ urlpatterns = [
     path("api/books/", include("books.urls")),
     path("api/cart/", include("cart.urls")),
     path("api/orders/", include("orders.urls")),
+    path("api/payments/", include("payments.urls")),
     path("", RedirectView.as_view(pattern_name="register", permanent=False)),
     path("", include("accounts.urls")),
 ]

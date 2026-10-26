@@ -7,24 +7,21 @@ from django.db import models
 class Order(models.Model):
     """A customer order placed from a shopping cart.
 
-    Lifecycle (issue #8 / #9):
+    Lifecycle (issues #8 and #9):
 
-    - ``PENDING``  — the order was placed and passed the availability
-      check, but payment has not succeeded yet.
-    - ``CONFIRMED`` — payment succeeded (issue #9); stock is reserved and
-      the order is confirmed.
-    - ``FAILED``   — payment failed; the order stays recorded for the
-      customer's history but is never treated as successful.
+    - ``PENDING``   — the order was placed and passed the availability
+      check, but payment has not succeeded yet. A failed payment attempt
+      leaves the order pending so the customer can retry.
+    - ``CONFIRMED`` — payment succeeded; stock is reserved and the order
+      is confirmed.
     """
 
     STATUS_PENDING = "PENDING"
     STATUS_CONFIRMED = "CONFIRMED"
-    STATUS_FAILED = "FAILED"
 
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending payment"),
         (STATUS_CONFIRMED, "Confirmed"),
-        (STATUS_FAILED, "Payment failed"),
     ]
 
     user = models.ForeignKey(
