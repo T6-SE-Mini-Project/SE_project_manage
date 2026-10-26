@@ -1,5 +1,6 @@
 
 from django.conf import settings
+from django.contrib.auth.hashers import identify_hasher
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
@@ -48,10 +49,19 @@ class CustomerRegistrationTests(TestCase):
         # Django must verify the original password against the stored hash.
         self.assertTrue(user.check_password(self.password))
 
-        # Verify the encoded hash format and configured algorithm.
-        encoded_parts = user.password.split("$")
-        self.assertGreaterEqual(len(encoded_parts), 4)
-        self.assertEqual(encoded_parts[0], "pbkdf2_sha256")
+        # The stored value must be an identifiable Django password hash in
+        # the "<algorithm>$..." encoded format, produced by the configured
+        # hasher (the algorithm label is the first dot-separated component).
+        # identify_hasher raises ValueError for anything that is not a valid
+        # Django encoded password.
+        hasher = identify_hasher(user.password)
+        configured_algorithm = (
+            settings.PASSWORD_HASHERS[0]
+            .split(".")[-1]
+            .replace("PasswordHasher", "")
+            .lower()
+        )
+        self.assertEqual(user.password.split("$")[0], configured_algorithm)
 
     def test_password_hash_uses_configured_hasher(self):
         self.register_customer()
