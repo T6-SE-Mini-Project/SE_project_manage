@@ -1,6 +1,5 @@
-
 from django.conf import settings
-from django.contrib.auth.hashers import identify_hasher
+from django.contrib.auth.hashers import get_hasher, identify_hasher
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
@@ -51,15 +50,18 @@ class CustomerRegistrationTests(TestCase):
 
         # The stored value must be an identifiable Django password hash in
         # the "<algorithm>$..." encoded format, produced by the configured
-        # hasher (the algorithm label is the first dot-separated component).
-        # identify_hasher raises ValueError for anything that is not a valid
-        # Django encoded password.
-        hasher = identify_hasher(user.password)
-        configured_algorithm = (
-            settings.PASSWORD_HASHERS[0]
-            .split(".")[-1]
-            .replace("PasswordHasher", "")
-            .lower()
+        # hasher. identify_hasher raises ValueError for anything that is not
+        # a valid Django encoded password.
+        #
+        # The expected label comes from the configured hasher's own
+        # ``algorithm`` attribute, which is what Django writes into the hash.
+        # It cannot be derived from the hasher's class name: the default
+        # PBKDF2PasswordHasher stores "pbkdf2_sha256", not "pbkdf2".
+        configured_algorithm = get_hasher("default").algorithm
+
+        self.assertEqual(
+            identify_hasher(user.password).algorithm,
+            configured_algorithm,
         )
         self.assertEqual(user.password.split("$")[0], configured_algorithm)
 
@@ -67,14 +69,12 @@ class CustomerRegistrationTests(TestCase):
         self.register_customer()
 
         user = User.objects.get(username="newcustomer")
-        configured_hasher = settings.PASSWORD_HASHERS[0]
 
+        # Same reasoning as above: assert against the configured hasher's
+        # algorithm label rather than a guess derived from its class name,
+        # so this holds for whichever hasher the settings select.
         self.assertTrue(
-            user.password.startswith(
-                configured_hasher.split(".")[-1]
-                .replace("PasswordHasher", "").lower()
-            )
-            or user.password.startswith("pbkdf2_sha256$")
+            user.password.startswith(f"{get_hasher('default').algorithm}$")
         )
 
     def test_duplicate_username_is_rejected(self):
