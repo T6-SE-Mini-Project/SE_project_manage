@@ -1,6 +1,6 @@
-from django.contrib.auth import authenticate, login
+from django.contrib.auth import login
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
-
 from django.contrib import messages
 from django.shortcuts import redirect, render
 
@@ -27,6 +27,7 @@ def register(request):
 def register_success(request):
     return render(request, "accounts/register_success.html")
 
+
 def customer_login(request):
     if request.method == "POST":
         form = AuthenticationForm(request, data=request.POST)
@@ -42,5 +43,6 @@ def customer_login(request):
     return render(request, "accounts/login.html", {"form": form})
 
 
+@login_required(login_url="customer_login")
 def login_success(request):
     return render(request, "accounts/login_success.html")

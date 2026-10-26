@@ -19,9 +19,13 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 
 # Development settings (disable DEBUG in production)
-DEBUG = True
+DEBUG = os.getenv("DJANGO_DEBUG", "True").lower() == "true"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if host.strip()
+]
 
 
 # Installed applications
@@ -126,3 +130,19 @@ STATIC_URL = "static/"
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# Session security: expire after 15 minutes of inactivity.
+SESSION_COOKIE_AGE = 900
+SESSION_SAVE_EVERY_REQUEST = True
+
+
+# Production security settings
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
