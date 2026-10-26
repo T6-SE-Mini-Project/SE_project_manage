@@ -1,15 +1,36 @@
 import { API_BASE_URL } from "./config";
 import type {
+  AdminBookFilters,
+  AdminBookListResponse,
+  AdminBookResponse,
+  AdminOrderDetailResponse,
+  AdminOrderFilters,
+  AdminOrderListResponse,
+  AdminOrderSummaryResponse,
   AvailabilityResponse,
+  BackupListResponse,
   BookFilters,
+  BookInput,
   BookListResponse,
   BookResponse,
   CartResponse,
   CategoriesResponse,
   CardPaymentInput,
+  CustomerDetailResponse,
+  CustomerListResponse,
+  CustomerResponse,
+  LoginInput,
   OrderListResponse,
   OrderResponse,
+  OrderStatus,
   PaymentResponse,
+  RegisterInput,
+  ReviewInput,
+  ReviewListResponse,
+  ReviewResponse,
+  SalesReportFilters,
+  SalesReportResponse,
+  SessionResponse,
 } from "./types";
 
 /** Error thrown by every failed API call, carrying the HTTP status. */
@@ -125,11 +146,7 @@ function queryString(filters: Record<string, string | undefined>): string {
 }
 
 export function getBooks(filters: BookFilters = {}): Promise<BookListResponse> {
-  return request(
-    `/books/${queryString(
-      filters as unknown as Record<string, string | undefined>,
-    )}`,
-  );
+  return request(`/books/${queryString(filters)}`);
 }
 
 export function getCategories(): Promise<CategoriesResponse> {
@@ -188,4 +205,169 @@ export function getOrder(orderId: string | number): Promise<OrderResponse> {
 
 export function payOrder(input: CardPaymentInput): Promise<PaymentResponse> {
   return request("/payments/", { method: "POST", body: input });
+}
+
+
+/* --- Accounts (session authentication) ------------------------------- */
+
+export function getSession(): Promise<SessionResponse> {
+  return request("/auth/session/");
+}
+
+export function login(input: LoginInput): Promise<SessionResponse> {
+  return request("/auth/login/", { method: "POST", body: input });
+}
+
+export function logout(): Promise<SessionResponse> {
+  return request("/auth/logout/", { method: "POST", body: {} });
+}
+
+export function register(input: RegisterInput): Promise<SessionResponse> {
+  return request("/auth/register/", { method: "POST", body: input });
+}
+
+/* --- Orders (issue #10) ---------------------------------------------- */
+
+export function cancelOrder(
+  orderId: number,
+  reason = "",
+): Promise<OrderResponse> {
+  return request(`/orders/${orderId}/cancel/`, {
+    method: "POST",
+    body: { reason },
+  });
+}
+
+/* --- Reviews (issue #11) --------------------------------------------- */
+
+export function getReviews(
+  bookId: string | number,
+): Promise<ReviewListResponse> {
+  return request(`/reviews/${queryString({ book: String(bookId) })}`);
+}
+
+export function createReview(
+  bookId: number,
+  input: ReviewInput,
+): Promise<ReviewResponse> {
+  return request("/reviews/", {
+    method: "POST",
+    body: { book_id: bookId, ...input },
+  });
+}
+
+export function updateReview(
+  reviewId: number,
+  input: Partial<ReviewInput>,
+): Promise<ReviewResponse> {
+  return request(`/reviews/${reviewId}/`, {
+    method: "PATCH",
+    body: input,
+  });
+}
+
+export function deleteReview(
+  reviewId: number,
+): Promise<{ summary: ReviewListResponse["summary"] }> {
+  return request(`/reviews/${reviewId}/`, { method: "DELETE" });
+}
+
+/* --- Administrator catalogue (issue #12) ----------------------------- */
+
+export function getAdminBooks(
+  filters: AdminBookFilters = {},
+): Promise<AdminBookListResponse> {
+  return request(`/admin/books/${queryString(filters)}`);
+}
+
+export function createAdminBook(
+  input: BookInput,
+): Promise<AdminBookResponse> {
+  return request("/admin/books/", { method: "POST", body: input });
+}
+
+export function updateAdminBook(
+  bookId: number,
+  input: Partial<BookInput>,
+): Promise<AdminBookResponse> {
+  return request(`/admin/books/${bookId}/`, {
+    method: "PATCH",
+    body: input,
+  });
+}
+
+export function deleteAdminBook(
+  bookId: number,
+): Promise<{ deleted: boolean; id: number }> {
+  return request(`/admin/books/${bookId}/`, { method: "DELETE" });
+}
+
+/* --- Administrator orders (issue #12) -------------------------------- */
+
+export function getAdminOrders(
+  filters: AdminOrderFilters = {},
+): Promise<AdminOrderListResponse> {
+  return request(`/admin/orders/${queryString(filters)}`);
+}
+
+export function getAdminOrder(
+  orderId: string | number,
+): Promise<AdminOrderDetailResponse> {
+  return request(`/admin/orders/${orderId}/`);
+}
+
+export function setAdminOrderStatus(
+  orderId: number,
+  status: OrderStatus,
+): Promise<AdminOrderSummaryResponse> {
+  return request(`/admin/orders/${orderId}/status/`, {
+    method: "POST",
+    body: { status },
+  });
+}
+
+export function cancelAdminOrder(
+  orderId: number,
+  reason = "",
+): Promise<AdminOrderSummaryResponse> {
+  return request(`/admin/orders/${orderId}/cancel/`, {
+    method: "POST",
+    body: { reason },
+  });
+}
+
+/* --- Administrator customers and reports (issue #24) ----------------- */
+
+export function getCustomers(
+  filters: { q?: string; status?: string } = {},
+): Promise<CustomerListResponse> {
+  return request(`/admin/customers/${queryString(filters)}`);
+}
+
+export function getCustomer(
+  customerId: string | number,
+): Promise<CustomerDetailResponse> {
+  return request(`/admin/customers/${customerId}/`);
+}
+
+export function setCustomerActive(
+  customerId: number,
+  isActive: boolean,
+): Promise<CustomerResponse> {
+  return request(`/admin/customers/${customerId}/status/`, {
+    method: "POST",
+    body: { is_active: isActive },
+  });
+}
+
+export function getSalesReport(
+  filters: SalesReportFilters = {},
+): Promise<SalesReportResponse> {
+  return request(`/admin/reports/sales/${queryString(filters)}`);
+}
+
+/* --- Backups (issue #18) --------------------------------------------- */
+
+export function getBackups(): Promise<BackupListResponse> {
+  return request("/admin/backups/");
 }

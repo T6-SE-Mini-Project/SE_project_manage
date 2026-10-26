@@ -14,12 +14,14 @@ import {
 import {
   ApiError,
   addToCart,
+  cancelOrder,
   getBook,
   getBooks,
   getCart,
   getCartAvailability,
   getCategories,
   getOrder,
+  getOrders,
   payOrder,
   placeOrder,
   removeCartItem,
@@ -32,6 +34,7 @@ import type {
   BookResponse,
   CartResponse,
   CategoriesResponse,
+  OrderListResponse,
   OrderResponse,
   PaymentResponse,
 } from "../types";
@@ -91,6 +94,14 @@ export function useCartAvailability(enabled = true) {
     queryKey: queryKeys.availability(),
     queryFn: getCartAvailability,
     enabled,
+  });
+}
+
+/** The customer's order history (issue #10). */
+export function useOrders() {
+  return useQuery<OrderListResponse, ApiError>({
+    queryKey: queryKeys.orders(),
+    queryFn: getOrders,
   });
 }
 
@@ -167,6 +178,32 @@ export function usePayOrder() {
         cart: { items: [], total: "0.00", item_count: 0 },
       } satisfies CartResponse);
       void queryClient.invalidateQueries({ queryKey: queryKeys.orders() });
+    },
+  });
+}
+
+
+/**
+ * Cancels one of the customer's own orders (issue #10).
+ *
+ * The server decides whether the order is still eligible, so a refused
+ * cancellation surfaces as an ApiError with status 409 and the order's
+ * current state.
+ */
+export function useCancelOrder() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    OrderResponse,
+    ApiError,
+    { orderId: number; reason?: string }
+  >({
+    mutationFn: ({ orderId, reason }) => cancelOrder(orderId, reason ?? ""),
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.order(data.order.id), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.orders() });
+      // A cancelled paid order returns its stock to the catalogue.
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
     },
   });
 }

@@ -30,3 +30,24 @@ export function formatDate(value: string | null | undefined): string {
     day: "numeric",
   });
 }
+
+/** A timestamp (ISO 8601) as a readable local date and time. */
+export function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "Not available";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}

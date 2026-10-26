@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 
 import AddToCartButton from "../components/AddToCartButton";
 import BookCover from "../components/BookCover";
+import ReviewSection from "../components/ReviewSection";
 import { useAddToCart, useBook } from "../hooks/useBookStore";
 import { formatDate, formatPrice } from "../format";
 
@@ -143,6 +144,8 @@ export default function BookDetailPage() {
         <h2>About this book</h2>
         <p>{book.description || "No description is available for this title yet."}</p>
       </section>
+
+      <ReviewSection bookId={book.id} />
     </article>
   );
 }
