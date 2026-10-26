@@ -21,6 +21,9 @@ DB_USER                     MySQL user                                *required*
 DB_PASSWORD                 MySQL password                            *required*
 DB_HOST                     MySQL host                                ``localhost``
 DB_PORT                     MySQL port                                ``3306``
+SESSION_COOKIE_AGE          Session inactivity timeout (seconds)      ``900``
+CSRF_TRUSTED_ORIGINS        Comma-separated trusted CSRF origins      *(empty)*
+HTTPS_ENABLED               Terminate TLS in front of Django          ``false``
 ==========================  ========================================  =====================
 
 Copy ``.env.example`` to ``.env`` and fill in the values for your machine.
@@ -117,6 +120,19 @@ DB_PORT = env_int("DB_PORT", default=3306)
 
 # Inactivity timeout (seconds) after which a session expires.
 SESSION_COOKIE_AGE = env_int("SESSION_COOKIE_AGE", default=900)
+
+
+# --- Deployment / HTTPS --------------------------------------------------------
+
+# Comma-separated list of origins that Django may trust for CSRF-protected
+# cross-origin requests, for example "https://bookstore.example.com". Only
+# needed when the React app is served from a different origin than the API.
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", [])
+
+# Set to true when the deployment terminates TLS in front of Django (for
+# example behind a reverse proxy or load balancer). Enabling it turns on the
+# HTTPS-only production security settings in config.settings.
+HTTPS_ENABLED = env_bool("HTTPS_ENABLED", default=False)
 
 
 # --- Production / cloud ------------------------------------------------------
