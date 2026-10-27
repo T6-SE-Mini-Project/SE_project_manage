@@ -1,3 +1,4 @@
+
 """Tests for the JSON authentication API used by the React frontend.
 
 The session endpoints are the enabler for order history (issue #10),
@@ -104,7 +105,7 @@ class AuthApiTests(TestCase):
             ]
         )
 
-    def test_registration_creates_and_signs_in_a_customer(self):
+    def test_registration_creates_customer_without_signing_them_in(self):
         response = self.post(
             "api_register",
             {
@@ -118,14 +119,22 @@ class AuthApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         body = response.json()
 
-        self.assertTrue(body["authenticated"])
-        self.assertEqual(body["user"]["username"], "newcustomer")
+        self.assertFalse(body["authenticated"])
+        self.assertIsNone(body["user"])
 
         created = get_user_model().objects.get(username="newcustomer")
         self.assertEqual(created.email, "new@example.com")
+
         # The password must be stored hashed, never in clear text.
         self.assertNotEqual(created.password, "BrandNewPass123")
         self.assertTrue(created.check_password("BrandNewPass123"))
+
+        # Registration must leave the customer logged out.
+        session = self.client.get(reverse("api_session_detail"))
+        self.assertEqual(
+            session.json(),
+            {"authenticated": False, "user": None},
+        )
 
     def test_registration_reports_field_errors(self):
         response = self.post(
@@ -219,6 +228,7 @@ class GuestHandoverTests(TestCase):
         carts = Cart.objects.filter(user=self.user)
         self.assertEqual(carts.count(), 1)
 
+    
     def test_guest_cart_survives_registration(self):
         self.add_to_cart(quantity=3)
 
@@ -234,10 +244,39 @@ class GuestHandoverTests(TestCase):
             ),
             content_type="application/json",
         )
+
         self.assertEqual(response.status_code, 201)
+        self.assertFalse(response.json()["authenticated"])
+
+        # Registration preserves the guest cart and session.
+        cart = self.client.get(reverse("cart_detail")).json()["cart"]
+        self.assertEqual(cart["item_count"], 3)
+
+        # The customer must explicitly log in before claiming the cart.
+        login_response = self.client.post(
+            reverse("api_login"),
+            data=json.dumps(
+                {
+                    "username": "freshcustomer",
+                    "password": "FreshPass12345",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(login_response.status_code, 200)
+        self.assertTrue(login_response.json()["authenticated"])
 
         cart = self.client.get(reverse("cart_detail")).json()["cart"]
         self.assertEqual(cart["item_count"], 3)
+
+        # After login, the cart should belong to the new customer.
+        created_user = get_user_model().objects.get(
+            username="freshcustomer"
+        )
+        self.assertTrue(
+            Cart.objects.filter(user=created_user).exists()
+        )
 
     def test_guest_order_is_claimed_by_the_account(self):
         self.add_to_cart(quantity=1)

@@ -1,3 +1,4 @@
+
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useLogout, useSession } from "../hooks/useAuth";
@@ -16,45 +17,52 @@ export default function Layout() {
   const itemCount = cartQuery.data?.cart.item_count ?? 0;
 
   async function handleLogout() {
-    await logoutMutation.mutateAsync(undefined);
-    navigate("/books");
+    try {
+      await logoutMutation.mutateAsync(undefined);
+      navigate("/login", { replace: true });
+    } catch {
+      // Keep the user on the current page if logout fails.
+    }
   }
 
   return (
     <div className="app-shell">
       <header className="site-header">
-        <Link className="brand" to="/books">
+        <Link
+          className="brand"
+          to={isAuthenticated ? "/books" : "/register"}
+        >
           <span className="brand-mark" aria-hidden="true">
             OBS
           </span>
           <span>Online Book Store</span>
         </Link>
 
-        <nav className="site-nav" aria-label="Main navigation">
-          <NavLink to="/books" className={navClass}>
-            Books
-          </NavLink>
-          <NavLink to="/cart" className={navClass}>
-            Cart
-            {itemCount > 0 ? (
-              <span className="cart-count" aria-label={`${itemCount} items`}>
-                {itemCount}
-              </span>
-            ) : null}
-          </NavLink>
-          <NavLink to="/orders" className={navClass}>
-            Orders
-          </NavLink>
-          {isStaff ? (
-            <NavLink to="/admin" className={navClass}>
-              Manage
-            </NavLink>
-          ) : null}
-        </nav>
+        {isAuthenticated ? (
+          <>
+            <nav className="site-nav" aria-label="Main navigation">
+              <NavLink to="/books" className={navClass}>
+                Books
+              </NavLink>
+              <NavLink to="/cart" className={navClass}>
+                Cart
+                {itemCount > 0 ? (
+                  <span className="cart-count" aria-label={`${itemCount} items`}>
+                    {itemCount}
+                  </span>
+                ) : null}
+              </NavLink>
+              <NavLink to="/orders" className={navClass}>
+                Orders
+              </NavLink>
+              {isStaff ? (
+                <NavLink to="/admin" className={navClass}>
+                  Manage
+                </NavLink>
+              ) : null}
+            </nav>
 
-        <div className="site-account">
-          {isAuthenticated ? (
-            <>
+            <div className="site-account">
               <span className="account-name">{user?.username}</span>
               <button
                 type="button"
@@ -64,18 +72,18 @@ export default function Layout() {
               >
                 {logoutMutation.isPending ? "Logging out..." : "Log out"}
               </button>
-            </>
-          ) : (
-            <>
-              <NavLink to="/login" className={navClass}>
-                Log in
-              </NavLink>
-              <NavLink to="/register" className={navClass}>
-                Register
-              </NavLink>
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        ) : (
+          <div className="site-account">
+            <NavLink to="/login" className={navClass}>
+              Log in
+            </NavLink>
+            <NavLink to="/register" className={navClass}>
+              Create account
+            </NavLink>
+          </div>
+        )}
       </header>
 
       <main className="page">

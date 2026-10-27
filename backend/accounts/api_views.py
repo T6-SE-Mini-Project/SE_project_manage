@@ -98,14 +98,10 @@ def session_delete(request):
     return JsonResponse({"authenticated": False, "user": None})
 
 
+
 @require_POST
 def account_create(request):
-    """Register a customer and sign them in.
-
-    Reuses ``CustomerRegistrationForm`` so password validation, the
-    confirmation field and the unique-email rule behave identically to
-    the registration page.
-    """
+    """Register a customer without automatically signing them in."""
     data, error_response = read_json(request)
     if error_response is not None:
         return error_response
@@ -126,33 +122,13 @@ def account_create(request):
             errors=serialize_form_errors(form),
         )
 
-    user = form.save()
+    form.save()
 
-    previous_session_key = request.session.session_key
-
-    # Authenticate so the configured backend is attached to the session.
-    authenticated = authenticate(
-        request,
-        username=form.cleaned_data["username"],
-        password=form.cleaned_data["password1"],
-    )
-    login(request, authenticated if authenticated is not None else user)
-
-    reassign_cart_session(
-        previous_session_key,
-        request.session.session_key,
-        request.user,
-    )
-    claim_session_orders(
-        previous_session_key,
-        request.session.session_key,
-        request.user,
-    )
-
+    # Account created, but the user remains logged out.
     return JsonResponse(
         {
-            "authenticated": True,
-            "user": serialize_user(request.user),
+            "authenticated": False,
+            "user": None,
         },
         status=201,
     )

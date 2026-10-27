@@ -1,8 +1,14 @@
+
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { useLogin, useSession } from "../hooks/useAuth";
 import { errorMessage, fieldError, fieldErrors } from "../errors";
+
+interface LoginLocationState {
+  from?: string;
+  registered?: boolean;
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -13,20 +19,24 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
-  // Where to return after a successful login: the page that redirected
-  // here, or the catalogue.
-  const from =
-    (location.state as { from?: string } | null)?.from ?? "/books";
+  const locationState = location.state as LoginLocationState | null;
+
+  // After registration, go to the Books page.
+  // Otherwise, preserve the original protected-page redirect.
+  const from = locationState?.registered
+    ? "/books"
+    : locationState?.from ?? "/books";
+
   const errors = fieldErrors(loginMutation.error);
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     try {
       await loginMutation.mutateAsync({ username, password });
       navigate(from, { replace: true });
     } catch {
-      // Rendered from the mutation state below.
+      // The error message is displayed below.
     }
   }
 
@@ -53,6 +63,12 @@ export default function LoginPage() {
           </p>
         </div>
       </header>
+
+      {locationState?.registered ? (
+        <div className="alert" role="status">
+          Account created successfully. Please log in.
+        </div>
+      ) : null}
 
       {loginMutation.isError ? (
         <div className="alert error" role="alert">

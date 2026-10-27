@@ -925,6 +925,19 @@ h2 {
   gap: 1.5rem;
 }
 
+.auth-page {
+  align-items: center;
+}
+
+.auth-page > * {
+  width: 100%;
+  max-width: 46rem;
+}
+
+.auth-page .auth-form {
+  width: 100%;
+  max-width: 46rem;
+}
 .auth-form {
   display: flex;
   flex-direction: column;

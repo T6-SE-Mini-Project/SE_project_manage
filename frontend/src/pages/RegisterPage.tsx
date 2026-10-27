@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -31,16 +32,20 @@ export default function RegisterPage() {
     setForm((current) => ({ ...current, [name]: value }));
   }
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     try {
       await registerMutation.mutateAsync(form);
-      // Registration signs the customer in, so go straight to the
-      // catalogue with their guest cart carried over.
-      navigate("/books", { replace: true });
+
+      // Account creation succeeds without logging the user in.
+      // Redirect to login and display a success message there.
+      navigate("/login", {
+        replace: true,
+        state: { registered: true },
+      });
     } catch {
-      // Rendered from the mutation state below.
+      // Registration errors are displayed below.
     }
   }
 
@@ -81,6 +86,7 @@ export default function RegisterPage() {
           <label htmlFor="new-username">Username</label>
           <input
             id="new-username"
+            name="username"
             type="text"
             autoComplete="username"
             value={form.username}
@@ -96,6 +102,7 @@ export default function RegisterPage() {
           <label htmlFor="new-email">Email address</label>
           <input
             id="new-email"
+            name="email"
             type="email"
             autoComplete="email"
             value={form.email}
@@ -111,6 +118,7 @@ export default function RegisterPage() {
           <label htmlFor="new-password">Password</label>
           <input
             id="new-password"
+            name="password1"
             type="password"
             autoComplete="new-password"
             value={form.password1}
@@ -126,6 +134,7 @@ export default function RegisterPage() {
           <label htmlFor="confirm-password">Confirm password</label>
           <input
             id="confirm-password"
+            name="password2"
             type="password"
             autoComplete="new-password"
             value={form.password2}
