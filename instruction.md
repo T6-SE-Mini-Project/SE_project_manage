@@ -53,11 +53,21 @@ Two rules hold the whole thing together:
 | `urls.py` | Mounts each app under `/api/<area>/`. |
 | `http.py` | Shared JSON helpers: `read_json`, `json_error`, `login_required_api`, `staff_required_api`. |
 | `settings_test.py` | Test-only settings: an isolated SQLite database, so tests never touch the development MySQL database. |
+| `views.py` | Two infrastructure endpoints: `/api/csrf/` and the `/healthz/` liveness probe. |
+| `tests.py` | Covers the deployment-only settings, which no other test exercises because the suite runs with `DEBUG=true`. |
 
 **Adding a setting:** add it to `env.py` with a default and a comment,
 expose it in `settings.py` if Django or an app needs it, and document it
-in both `.env.example` files. Never read `os.environ` anywhere else — one
-place to look is the point.
+in **all three** `.env.example` files (`backend/`, `frontend/`, root) plus
+`backend/.env.production.example` and `render.yaml` when it matters in
+production. Never read `os.environ` anywhere else — one place to look is
+the point.
+
+Settings that only apply in production (`DJANGO_DEBUG=false` with
+`HTTPS_ENABLED=true`) are easy to break without noticing, since the test
+suite runs with debug on. `config/tests.py` imports `config.settings` in a
+subprocess under a production environment and asserts them, so add a case
+there for any new one. See [Docs/Deployment.md](Docs/Deployment.md).
 
 ### Models — the data and its guarantees
 

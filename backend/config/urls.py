@@ -2,10 +2,11 @@ from django.contrib import admin
 from django.urls import include, path
 from django.views.generic import RedirectView
 
-from .views import csrf_token
+from .views import csrf_token, healthz
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("healthz/", healthz, name="healthz"),
     path("api/csrf/", csrf_token, name="csrf_token"),
     path("api/auth/", include("accounts.api_urls")),
     path("api/books/", include("books.urls")),
