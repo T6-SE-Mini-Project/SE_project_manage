@@ -45,6 +45,14 @@ is needed. This is why `VITE_API_BASE_URL` stays `/api` in production — see
 One consequence: requests arrive at Django carrying the **Vercel** origin, so
 that is the value `CSRF_TRUSTED_ORIGINS` must contain, not the Render hostname.
 
+The rewrite source is written as the regex `/api/(.*)` with the `$1` capture in
+the destination, **not** as `/api/:path*`. The `:path*` form was silently not
+matched on the live deployment: every `/api/...` request fell through to the SPA
+catch-all and came back as `index.html` with status 200. After changing this
+file, always re-check with
+`curl -s -o /dev/null -w '%{content_type}\n' https://<project>.vercel.app/api/books/`
+— it must print `application/json`, never `text/html`.
+
 ## 1. Backend on Render
 
 ### Deploy
@@ -145,6 +153,12 @@ man-in-the-middle. To verify it as well:
 4. Deploy, then copy the assigned URL into the backend's
    `CSRF_TRUSTED_ORIGINS` (step 3 of section 1).
 
+The current production deployment is
+`https://online-book-store-theta-seven.vercel.app` (Vercel project
+`online-book-store`, team `puneethv333s-projects`). That exact origin still has
+to be added to the Render service's `CSRF_TRUSTED_ORIGINS` before register,
+login or checkout can succeed; reads such as the catalogue work without it.
+
 If the Render service is renamed, or Render assigned a suffixed hostname,
 update the rewrite destination in `frontend/vercel.json` to match.
 
@@ -213,3 +227,4 @@ it is set, so the loop cannot be reintroduced unnoticed.
 | `(2005, "Unknown server host ... (-2)")` | The database hostname does not resolve: errno -2 is a DNS failure, so nothing reached the database. Aiven drops the DNS record when a service is powered off or deleted | Check the service is running in the Aiven console and copy the current host; verify with `nslookup <host>` before redeploying |
 | A 404 shows Django's debug page, or cookies lack `Secure` | `DJANGO_DEBUG` is not `false` on the platform, so the production security block never runs | Set `DJANGO_DEBUG=false` and `HTTPS_ENABLED=true`. An empty or missing value now fails safe to `DEBUG=False` |
 | Site loads but every `/api` call 404s | `frontend/vercel.json` rewrite points at the wrong Render hostname | Match it to the exact URL on the Render dashboard |
+| `curl .../api/books/` returns `text/html` and the SPA page | The rewrite did not match, so the request fell through to the SPA catch-all | Use `/api/(.*)` with `$1` (not `/api/:path*`); see *Why the API is proxied* |
