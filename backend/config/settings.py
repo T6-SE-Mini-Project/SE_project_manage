@@ -91,8 +91,12 @@ DATABASES = {
         "PASSWORD": env.DB_PASSWORD,
         "HOST": env.DB_HOST,
         "PORT": env.DB_PORT,
+        # Reuse connections in production; 0 locally. See config/env.py.
+        "CONN_MAX_AGE": env.DB_CONN_MAX_AGE,
         "OPTIONS": {
             "charset": "utf8mb4",
+            # TLS settings for the managed database, empty when unset.
+            **env.DB_SSL_OPTIONS,
         },
     }
 }
@@ -129,6 +133,22 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = env.BASE_DIR / "staticfiles"
 
+# In production gunicorn has no web server in front of it, so WhiteNoise
+# (already in MIDDLEWARE) serves the collected static files. The compressed
+# manifest backend fingerprints every filename so the files can be cached
+# indefinitely, and it pre-compresses them. It requires
+# "manage.py collectstatic" to have run first; the container entrypoint does
+# that on every start, before gunicorn binds the port.
+if not DEBUG:
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        },
+    }
+
 CSRF_TRUSTED_ORIGINS = env.CSRF_TRUSTED_ORIGINS
 
 
@@ -153,6 +173,13 @@ if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
     if env.HTTPS_ENABLED:
+        # Render, Vercel and every other managed platform terminate TLS at
+        # their edge and forward plain HTTP with "X-Forwarded-Proto: https".
+        # Without trusting that header Django considers every request
+        # insecure, and SECURE_SSL_REDIRECT below would redirect to HTTPS in
+        # an endless loop. Only safe because the platform's proxy always
+        # overwrites the header on inbound requests.
+        SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
         SECURE_SSL_REDIRECT = True
         SESSION_COOKIE_SECURE = True
         CSRF_COOKIE_SECURE = True
