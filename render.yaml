@@ -40,7 +40,7 @@ services:
       # this stays correct even if the service is renamed. Add a custom domain
       # here as a comma-separated entry when you attach one.
       - key: DJANGO_ALLOWED_HOSTS
-        value: bookstore-api.onrender.com
+        value: bookstore-api-7g5z.onrender.com
 
       # Render terminates TLS at its edge. This turns on SECURE_SSL_REDIRECT,
       # Secure cookies, HSTS and the X-Forwarded-Proto trust in settings.py.

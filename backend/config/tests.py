@@ -211,6 +211,23 @@ print(json.dumps({
             "whitenoise.storage.CompressedManifestStaticFilesStorage",
         )
 
+    def test_missing_debug_variable_fails_safe(self):
+        # A deployment that leaves DJANGO_DEBUG empty must not serve
+        # Django's debug pages. This happened in production once: the
+        # variable defaulted to True, publishing the whole URL map and
+        # tracebacks, and leaving the session and CSRF cookies without
+        # Secure.
+        #
+        # An empty value is used rather than removing the variable, because
+        # env_bool treats empty and absent identically, and a truly absent
+        # variable would be filled from backend/.env on a developer machine
+        # while being genuinely absent in CI and on Render.
+        settings = self.load_settings(DJANGO_DEBUG="")
+
+        self.assertFalse(settings["debug"])
+        self.assertTrue(settings["session_cookie_secure"])
+        self.assertTrue(settings["csrf_cookie_secure"])
+
     def test_debug_deployment_keeps_the_development_defaults(self):
         # The flip side: with DEBUG on, none of the HTTPS-only settings
         # should appear, or local development breaks.

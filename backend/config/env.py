@@ -14,7 +14,7 @@ Environment variables
 Variable                    Purpose                                   Default
 ==========================  ========================================  =====================
 DJANGO_SECRET_KEY           Django signing key                        *required*
-DJANGO_DEBUG                Enable development/debug mode             ``true``
+DJANGO_DEBUG                Enable development/debug mode             ``false``
 DJANGO_ALLOWED_HOSTS        Comma-separated permitted hosts           ``localhost,127.0.0.1``
 DB_NAME                     MySQL database name                       *required*
 DB_USER                     MySQL user                                *required*
@@ -108,7 +108,13 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", required=True)
 
 # Development mode. Never enable in production; disabling it also turns on
 # the production security settings in config.settings.
-DEBUG = env_bool("DJANGO_DEBUG", default=True)
+#
+# The default is False so that a missing or misspelled DJANGO_DEBUG fails
+# safe. Defaulting to True meant an unset variable silently served Django's
+# debug pages in production, publishing the whole URL map and a traceback
+# with local variables on any unhandled error. Local development sets
+# DJANGO_DEBUG=true explicitly, as backend/.env.example does.
+DEBUG = env_bool("DJANGO_DEBUG", default=False)
 
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", ["localhost", "127.0.0.1"])
 
