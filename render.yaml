@@ -1,0 +1,122 @@
+# Render blueprint for the Online Book Store backend.
+#
+# Render reads this file from the repository root. Create the service with
+# Render Dashboard -> New -> Blueprint, point it at this repo, and fill in the
+# values marked "sync: false" (Render prompts for each one, and never stores
+# them in git).
+#
+# The database is NOT defined here: the project uses an existing managed MySQL
+# instance (Aiven), supplied through the DB_* variables below.
+services:
+  - type: web
+    name: bookstore-api
+    runtime: docker
+    plan: free
+    region: oregon
+
+    # Build the image from the backend directory. The Dockerfile installs the
+    # MySQL client headers that mysqlclient needs to compile, which is why
+    # this is a Docker service rather than a native Python one.
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+
+    # Liveness probe. config.views.healthz answers without touching the
+    # database, so a database blip cannot make Render restart the service.
+    healthCheckPath: /healthz/
+
+    autoDeploy: true
+
+    envVars:
+      # --- Security ---------------------------------------------------------
+      # Render generates a strong value once and keeps it across deploys.
+      # Changing it later invalidates every active session.
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+
+      - key: DJANGO_DEBUG
+        value: "false"
+
+      # config/env.py also appends RENDER_EXTERNAL_HOSTNAME automatically, so
+      # this stays correct even if the service is renamed. Add a custom domain
+      # here as a comma-separated entry when you attach one.
+      - key: DJANGO_ALLOWED_HOSTS
+        value: bookstore-api.onrender.com
+
+      # Render terminates TLS at its edge. This turns on SECURE_SSL_REDIRECT,
+      # Secure cookies, HSTS and the X-Forwarded-Proto trust in settings.py.
+      - key: HTTPS_ENABLED
+        value: "true"
+
+      # The browser's origin, which is the VERCEL site, not this service:
+      # requests arrive through Vercel's /api rewrite carrying that Origin
+      # header, and Django's CSRF check rejects anything not listed here.
+      # Set it to e.g. https://online-book-store.vercel.app after the first
+      # Vercel deploy. Comma-separated; include any custom domain too.
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+
+      # --- Managed MySQL (Aiven) -------------------------------------------
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+
+      # Aiven accepts only TLS connections. "true" encrypts the connection
+      # without verifying the server certificate, which is enough to deploy.
+      # To get a *verified* connection, download Aiven's CA bundle, add it as
+      # a Render Secret File, and set DB_SSL_CA to its path
+      # (/etc/secrets/<filename>); DB_SSL_CA takes precedence over this flag.
+      - key: DB_SSL_REQUIRED
+        value: "true"
+      - key: DB_SSL_CA
+        sync: false
+
+      # Reuse each worker's connection for a minute instead of reconnecting
+      # per request. Keep workers x instances below Aiven's connection limit.
+      - key: DB_CONN_MAX_AGE
+        value: "60"
+
+      # --- Application ------------------------------------------------------
+      - key: SESSION_COOKIE_AGE
+        value: "900"
+
+      # Gunicorn workers, read by backend/entrypoint.sh. Two is right for
+      # Render's free 512 MB instance.
+      - key: WEB_CONCURRENCY
+        value: "2"
+
+      # --- Backups (issue #18, OBS-NF-006) ---------------------------------
+      # NOTE: Render's filesystem is ephemeral and the free plan has no disks,
+      # so these artifacts do not survive a restart. To satisfy OBS-NF-006 in
+      # production, attach a Render Disk (paid) mounted at /var/backups/
+      # bookstore and set BACKUP_DIR to it, or ship the artifacts off-box.
+      # The BackupRun audit records live in MySQL and do persist either way.
+      - key: BACKUP_DIR
+        value: backups
+      - key: BACKUP_RETENTION_DAYS
+        value: "14"
+      - key: BACKUP_MAX_AGE_HOURS
+        value: "24"
+
+# Scheduled backups. OBS-NF-006 wants one at least every 24 hours. Render cron
+# jobs require a paid plan, so this is left commented out rather than silently
+# making the blueprint non-free. Uncomment once you are on a paid plan, and
+# give it the same DB_* values as the web service.
+#
+#  - type: cronjob
+#    name: bookstore-backup
+#    runtime: docker
+#    plan: starter
+#    region: oregon
+#    schedule: "0 2 * * *"
+#    dockerfilePath: ./backend/Dockerfile
+#    dockerContext: ./backend
+#    dockerCommand: python manage.py backup_data
+#    envVars:
+#      - fromGroup: bookstore-db

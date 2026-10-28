@@ -21,10 +21,13 @@ DB_USER                     MySQL user                                *required*
 DB_PASSWORD                 MySQL password                            *required*
 DB_HOST                     MySQL host                                ``localhost``
 DB_PORT                     MySQL port                                ``3306``
+DB_SSL_CA                   Path to the MySQL CA bundle (TLS)         *(empty)*
+DB_SSL_REQUIRED             Require TLS, skip certificate check       ``false``
+DB_CONN_MAX_AGE             Seconds a database connection is reused   ``0``
 SESSION_COOKIE_AGE          Session inactivity timeout (seconds)      ``900``
 CSRF_TRUSTED_ORIGINS        Comma-separated trusted CSRF origins      *(empty)*
 HTTPS_ENABLED               Terminate TLS in front of Django          ``false``
-BACKUP_DIR                  Where order/inventory backups are written ``<backend>/backups``
+BACKUP_DIR                  Where order/inventory backups are kept    ``<backend>/backups``
 BACKUP_RETENTION_DAYS       Days of backup artifacts to keep          ``14``
 BACKUP_MAX_AGE_HOURS        Maximum accepted age of a good backup     ``24``
 ==========================  ========================================  =====================
@@ -109,6 +112,14 @@ DEBUG = env_bool("DJANGO_DEBUG", default=True)
 
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", ["localhost", "127.0.0.1"])
 
+# Render publishes the service's public hostname as RENDER_EXTERNAL_HOSTNAME
+# (for example "bookstore-api.onrender.com"). Appending it automatically means
+# a deploy never fails with DisallowedHost because the hostname was not copied
+# into DJANGO_ALLOWED_HOSTS by hand.
+_platform_hostname = env("RENDER_EXTERNAL_HOSTNAME", default="")
+if _platform_hostname and _platform_hostname not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_platform_hostname)
+
 
 # --- MySQL database ----------------------------------------------------------
 
@@ -117,6 +128,43 @@ DB_USER = env("DB_USER", required=True)
 DB_PASSWORD = env("DB_PASSWORD", required=True)
 DB_HOST = env("DB_HOST", default="localhost")
 DB_PORT = env_int("DB_PORT", default=3306)
+
+# Seconds Django keeps a database connection open for reuse. 0 (the default)
+# opens a fresh connection per request, which is correct for local work. In
+# production a small positive value removes a TCP+TLS handshake from every
+# request; keep it well below the provider's idle timeout, and remember each
+# gunicorn worker holds its own connection against the plan's connection limit.
+DB_CONN_MAX_AGE = env_int("DB_CONN_MAX_AGE", default=0)
+
+# Managed MySQL providers (Aiven, PlanetScale, RDS) accept only TLS
+# connections. Point DB_SSL_CA at the provider's CA bundle for a *verified*
+# connection; on Render, upload the bundle as a Secret File and use the path
+# it is mounted at (for example /etc/secrets/aiven-ca.pem).
+#
+# DB_SSL_REQUIRED=true is the weaker fallback: the connection is encrypted but
+# the server certificate is not verified, which leaves it open to an active
+# man-in-the-middle. Prefer the CA bundle in production.
+DB_SSL_CA = env("DB_SSL_CA", default="")
+DB_SSL_REQUIRED = env_bool("DB_SSL_REQUIRED", default=False)
+
+
+def db_ssl_options(ca_path, ssl_required):
+    """Return the DATABASES OPTIONS entries that configure TLS.
+
+    A CA bundle wins over the bare requirement flag, because it gives the
+    strictly stronger guarantee: the connection is encrypted *and* the
+    server certificate is verified.
+    """
+    if ca_path:
+        return {"ssl": {"ca": ca_path}}
+    if ssl_required:
+        # mysqlclient forwards ssl_mode to libmysqlclient: encrypt the
+        # connection, but do not verify the server certificate.
+        return {"ssl_mode": "REQUIRED"}
+    return {}
+
+
+DB_SSL_OPTIONS = db_ssl_options(DB_SSL_CA, DB_SSL_REQUIRED)
 
 
 # --- Sessions ----------------------------------------------------------------

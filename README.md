@@ -10,8 +10,9 @@ customer accounts and generate sales reports.
   JSON API.
 - **Frontend:** React 18 with TypeScript and Vite, with TanStack Query as
   the data layer.
-- **Deployment:** Docker Compose for MySQL, the backend and an nginx-served
-  frontend build.
+- **Deployment:** Docker Compose locally; in production the backend runs on
+  Render (Docker) and the frontend on Vercel, against managed MySQL on Aiven.
+  See [Docs/Deployment.md](Docs/Deployment.md).
 
 ## Repository layout
 
@@ -80,6 +81,9 @@ python -c "from django.core.management.utils import get_random_secret_key; print
 | `DJANGO_ALLOWED_HOSTS` | Permitted hosts, comma separated | `localhost,127.0.0.1` |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | MySQL credentials | *required* |
 | `DB_HOST` / `DB_PORT` | MySQL location | `localhost` / `3306` |
+| `DB_SSL_CA` | CA bundle path for a verified TLS database connection | *(empty)* |
+| `DB_SSL_REQUIRED` | Require TLS without verifying the certificate | `false` |
+| `DB_CONN_MAX_AGE` | Seconds a database connection is reused | `0` |
 | `SESSION_COOKIE_AGE` | Session inactivity timeout (seconds) | `900` |
 | `CSRF_TRUSTED_ORIGINS` | Trusted cross-origin origins | *(empty)* |
 | `HTTPS_ENABLED` | TLS terminated in front of Django | `false` |
@@ -246,6 +250,34 @@ SHA-256 checksums, so a backup restores with
 `python manage.py loaddata <backup-dir>/books.book.json`. Administrators
 can inspect the runs at `GET /api/admin/backups/` or on the Sales reports
 screen.
+
+## Deployment
+
+Production runs the backend on **Render** and the frontend on **Vercel**,
+against the existing managed **Aiven MySQL** instance.
+
+| Piece | Config file | Committed |
+|---|---|---|
+| Render service (Docker, env vars, health check) | `render.yaml` | yes |
+| Production backend values, for reference | `backend/.env.production.example` | yes, no secrets |
+| Vercel build, `/api` rewrite, headers | `frontend/vercel.json` | yes |
+| Production frontend values | `frontend/.env.production` | yes, no secrets |
+
+Vercel rewrites `/api/*` to the Render service **server-side**, so the browser
+only ever sees one origin. That is deliberate: authentication is a Django
+session cookie and `frontend/src/api.ts` sends `credentials: "same-origin"`, so
+a cross-origin API would make the session cookie third-party — blocked by
+Safari and Firefox. `VITE_API_BASE_URL` therefore stays `/api` in production.
+
+Two values must be set by hand after the first deploy:
+
+- the backend's `CSRF_TRUSTED_ORIGINS` → the Vercel origin (the browser's
+  origin is what Django's CSRF check sees, not the Render hostname);
+- the Aiven credentials, which Render prompts for as it reads `render.yaml`.
+
+Step-by-step instructions, the free-plan caveats (cold starts, ephemeral
+backup storage) and a troubleshooting table are in
+[Docs/Deployment.md](Docs/Deployment.md).
 
 ## Contributing
 
