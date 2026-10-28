@@ -31,7 +31,7 @@ Production topology:
 Authentication uses Django's **session cookie**, and every `fetch` in
 `frontend/src/api.ts` sends `credentials: "same-origin"`.
 
-If the browser called `https://bookstore-api.onrender.com` directly, that
+If the browser called `https://bookstore-api-7g5z.onrender.com` directly, that
 cookie would be a **third-party** cookie, which Safari and Firefox block by
 default and Chrome restricts. Logins would appear to succeed and then every
 following request would come back `401`.
@@ -71,6 +71,17 @@ that is the value `CSRF_TRUSTED_ORIGINS` must contain, not the Render hostname.
    Vercel origin, e.g. `https://online-book-store.vercel.app`. Without it
    every `POST`, including login, fails CSRF validation with `403`.
 
+**Render may append a random suffix to the hostname** when the service name is
+already taken globally — `bookstore-api` became `bookstore-api-7g5z.onrender.com`
+on this deployment. The hostname is not predictable from the service name, so
+after creating the service copy the exact URL from the top of its dashboard page
+and make sure the rewrite destination in `frontend/vercel.json` matches it. A
+mismatch makes every `/api` call from the site return Vercel's 404, with the
+backend itself perfectly healthy.
+
+`DJANGO_ALLOWED_HOSTS` needs no edit for this: `config/env.py` appends Render's
+`RENDER_EXTERNAL_HOSTNAME` automatically.
+
 The service is built from `backend/Dockerfile` rather than Render's native
 Python runtime because `mysqlclient` is a C extension that needs the MySQL
 client headers; the image installs them, so the build matches CI and local.
@@ -89,8 +100,8 @@ command so only one process migrates at a time.
 ### Verify
 
 ```bash
-curl -i https://bookstore-api.onrender.com/healthz/          # 200 {"status":"ok"}
-curl -i https://bookstore-api.onrender.com/api/books/        # 200, JSON catalogue
+curl -i https://bookstore-api-7g5z.onrender.com/healthz/          # 200 {"status":"ok"}
+curl -i https://bookstore-api-7g5z.onrender.com/api/books/        # 200, JSON catalogue
 ```
 
 `/healthz/` is Render's health check path. It deliberately does **not** touch
@@ -134,8 +145,8 @@ man-in-the-middle. To verify it as well:
 4. Deploy, then copy the assigned URL into the backend's
    `CSRF_TRUSTED_ORIGINS` (step 3 of section 1).
 
-If the Render service is renamed, update the rewrite destination in
-`frontend/vercel.json` to match.
+If the Render service is renamed, or Render assigned a suffixed hostname,
+update the rewrite destination in `frontend/vercel.json` to match.
 
 ### Verify
 
@@ -199,3 +210,6 @@ it is set, so the loop cannot be reintroduced unnoticed.
 | `(2026, 'TLS/SSL error')` or connection refused from Aiven | TLS not configured | Set `DB_SSL_REQUIRED=true`, or `DB_SSL_CA` to the CA bundle path |
 | `OperationalError: too many connections` | `DB_CONN_MAX_AGE` x workers x instances exceeds the Aiven limit | Lower `WEB_CONCURRENCY` or `DB_CONN_MAX_AGE` |
 | First request after idle takes ~50s | Render free-plan cold start | Expected; upgrade the plan to avoid it |
+| `(2005, "Unknown server host ... (-2)")` | The database hostname does not resolve: errno -2 is a DNS failure, so nothing reached the database. Aiven drops the DNS record when a service is powered off or deleted | Check the service is running in the Aiven console and copy the current host; verify with `nslookup <host>` before redeploying |
+| A 404 shows Django's debug page, or cookies lack `Secure` | `DJANGO_DEBUG` is not `false` on the platform, so the production security block never runs | Set `DJANGO_DEBUG=false` and `HTTPS_ENABLED=true`. An empty or missing value now fails safe to `DEBUG=False` |
+| Site loads but every `/api` call 404s | `frontend/vercel.json` rewrite points at the wrong Render hostname | Match it to the exact URL on the Render dashboard |
