@@ -144,6 +144,14 @@ rejects a token minted for a different Firebase project. The session
 cookie still exists, but only as the key for a *guest* cart and guest
 orders; it no longer authenticates anybody on the API.
 
+Firebase is the **only** credential path. The Django template
+registration and login pages that this project used to serve at
+`/register/` and `/login/` are gone: a second way to create a password
+account would have bypassed Firebase entirely. The backend now serves
+only the JSON API and Django's admin site, and its root redirects to
+`/admin/`. The admin site keeps its own password login, for the
+administrator accounts made with `createsuperuser`.
+
 ### One-time Firebase setup
 
 1. Create a project in the [Firebase console](https://console.firebase.google.com/).

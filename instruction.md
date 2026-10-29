@@ -211,7 +211,11 @@ Three rules follow from that:
   *guest* cart and guest orders, and `accounts/api_views.py` hands those
   over to the account on sign-in. Anything else keyed by session must be
   handed over there too — and must not follow one browser from one
-  customer to the next (`SESSION_UID_KEY` is what prevents that).
+  customer to the next (`SESSION_UID_KEY` is what prevents that). A
+  session user is still honoured when no token is sent, but the only way
+  to get one now is Django's admin login: the template registration and
+  login pages were removed so that Firebase is the single credential
+  path. Do not add another.
 
 Tests mint real tokens with `accounts.tests_firebase.FirebaseTokenMixin`,
 which signs them with a throwaway key and points the verifier's
