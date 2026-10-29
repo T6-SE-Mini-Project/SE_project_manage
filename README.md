@@ -14,6 +14,15 @@ customer accounts and generate sales reports.
   Render (Docker) and the frontend on Vercel, against managed MySQL on Aiven.
   See [Docs/Deployment.md](Docs/Deployment.md).
 
+## Live demo
+
+- **Frontend:** <https://online-book-store-theta-seven.vercel.app>
+- **Backend API:** <https://bookstore-api-7g5z.onrender.com>
+
+The site is hosted on Vercel's free plan and proxies `/api/*` to the Render
+backend, so the catalogue may take a few seconds to load if the backend has
+been idle.
+
 ## Repository layout
 
 ```
@@ -255,6 +264,9 @@ screen.
 
 Production runs the backend on **Render** and the frontend on **Vercel**,
 against the existing managed **Aiven MySQL** instance.
+
+- Frontend: <https://online-book-store-theta-seven.vercel.app>
+- Backend API: <https://bookstore-api-7g5z.onrender.com>
 
 | Piece | Config file | Committed |
 |---|---|---|
