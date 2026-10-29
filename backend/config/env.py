@@ -28,6 +28,9 @@ SESSION_COOKIE_AGE          Session inactivity timeout (seconds)      ``900``
 FIREBASE_PROJECT_ID         Firebase project that issues ID tokens    *(empty)*
 FIREBASE_TOKEN_LEEWAY       Clock-skew allowance when verifying (s)   ``30``
 FIREBASE_PUBLIC_KEYS_URL    Where Google publishes the signing certs  Google's URL
+REDIS_URL                   Redis cache connection URL                *(empty)*
+CACHE_ENABLED               Serve API reads from the cache            ``true``
+REDIS_TIMEOUT               Socket timeout for cache operations (s)   ``2``
 CSRF_TRUSTED_ORIGINS        Comma-separated trusted CSRF origins      the Vercel site
 HTTPS_ENABLED               Terminate TLS in front of Django          ``false``
 BACKUP_DIR                  Where order/inventory backups are kept    ``<backend>/backups``
@@ -246,6 +249,35 @@ FIREBASE_PUBLIC_KEYS_URL = env(
         "securetoken@system.gserviceaccount.com"
     ),
 )
+
+
+# --- Redis cache (Upstash) ----------------------------------------------------
+
+# Connection URL for the Redis instance that caches API responses
+# (config/cache.py). Upstash gives two endpoints per database; this is the
+# **TCP** one, and it is TLS-only, so the URL starts with rediss://
+#
+#   rediss://default:<password>@<endpoint>.upstash.io:6379
+#
+# Leave it empty to run without a cache: CACHES then uses Django's dummy
+# backend and every read goes to MySQL, which is the right default for
+# local work and what the test suite uses. Caching is opt-in by configuring
+# this, so nothing silently caches with a per-process store that several
+# gunicorn workers would each keep their own copy of.
+#
+# The URL contains the password, so it is a SECRET: it belongs in the
+# hosting dashboard, never in a committed file.
+REDIS_URL = env("REDIS_URL", default="").strip()
+
+# Kill switch. False stops the API serving reads from the cache while
+# leaving REDIS_URL configured, which is what to reach for first if cached
+# data is ever suspected of being stale.
+CACHE_ENABLED = env_bool("CACHE_ENABLED", default=True) and bool(REDIS_URL)
+
+# Seconds to wait for Upstash before giving up on a cache operation. A
+# cache miss costs one database query; a slow cache would otherwise cost
+# every request its own stall, so this is deliberately impatient.
+REDIS_TIMEOUT = env_int("REDIS_TIMEOUT", default=2)
 
 
 # --- Deployment / HTTPS --------------------------------------------------------

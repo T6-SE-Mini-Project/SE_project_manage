@@ -26,6 +26,19 @@ DATABASES = {
     }
 }
 
+# No response caching in the suite. Every test would otherwise share one
+# process-local cache, and a test that changes a row through the ORM and
+# then reads it back through the API would be served the previous answer.
+# The caching behaviour itself is tested in config/tests_cache.py, which
+# turns a local-memory cache on explicitly.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.dummy.DummyCache",
+    }
+}
+
+CACHE_ENABLED = False
+
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.MD5PasswordHasher",
 ]

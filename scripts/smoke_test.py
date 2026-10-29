@@ -64,6 +64,7 @@ class Client:
         # The Firebase ID token. The session cookie is kept as well,
         # because it still keys a guest cart.
         self.token = token
+        self.last_headers = {}
         self.jar = CookieJar()
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.jar))
@@ -81,6 +82,7 @@ class Client:
         headers = {"Accept": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        self.last_headers = {}
         data = None
         if method not in ("GET", "HEAD"):
             headers["X-CSRFToken"] = self.token()
@@ -91,6 +93,7 @@ class Client:
         try:
             with self.opener.open(req, timeout=30) as resp:
                 body = resp.read().decode()
+                self.last_headers = dict(resp.headers)
                 return resp.status, (json.loads(body) if body.strip() else {})
         except urllib.error.HTTPError as exc:
             body = exc.read().decode()
@@ -282,6 +285,31 @@ def run_checks():
     print(f"  revenue={r['total']} orders={r['order_count']} aov={r['average_order_value']} items={r['items_sold']}")
     check("cancelled order excluded from revenue", r["order_count"], 1)
     check("bad period refused", admin.call("GET", "/api/admin/reports/sales/?start=notadate")[0], 400)
+
+    print("\n== Response cache ==")
+    guest = Client("cache")
+    guest.call("GET", "/api/books/")
+    first = guest.last_headers.get("X-Cache")
+
+    if first is None:
+        print("  [SKIP] caching is off on this deployment (no REDIS_URL)")
+    else:
+        guest.call("GET", "/api/books/")
+        check("second catalogue read is a cache hit",
+              guest.last_headers.get("X-Cache"), "HIT")
+
+        # A catalogue write must reach the cached read at once, not when
+        # the TTL lapses.
+        admin.call("PATCH", f"/api/admin/books/{book['id']}/",
+                   {"stock_quantity": stock_before})
+        guest.call("GET", "/api/books/")
+        check("a write invalidates the cached catalogue",
+              guest.last_headers.get("X-Cache"), "MISS")
+
+        # Identity must never be served from cache.
+        customer.call("GET", "/api/auth/session/")
+        check("the session endpoint is not cached",
+              customer.last_headers.get("X-Cache"), None)
 
     print("\n== Issue #18: backups ==")
     status, backups = admin.call("GET", "/api/admin/backups/")

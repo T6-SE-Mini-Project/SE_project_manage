@@ -1,6 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 
+from config.cache import BOOKS, CART, ORDERS, invalidate
 from config.http import json_error, read_json
 from orders.models import Order
 from orders.serializers import serialize_order
@@ -47,6 +48,10 @@ def payment_create(request):
         return JsonResponse(body, status=outcome.status)
 
     order.refresh_from_db()
+
+    # A successful payment confirms the order and reserves its stock, so
+    # the catalogue, the order history and the cart all changed.
+    invalidate(ORDERS, BOOKS, CART)
 
     return JsonResponse(
         {

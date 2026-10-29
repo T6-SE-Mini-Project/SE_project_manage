@@ -5,6 +5,7 @@ gunicorn==23.0.0
 mysqlclient==2.3.0
 PyJWT==2.15.1
 python-dotenv==1.2.4
+redis==8.1.0
 sqlparse==0.6.0
 tzdata==2026.5
 whitenoise==6.8.2

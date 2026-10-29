@@ -12,6 +12,8 @@ customer accounts and generate sales reports.
   the data layer.
 - **Authentication:** Firebase Authentication (email/password and Google),
   verified on the backend as a JWT bearer token.
+- **Cache:** Redis (Upstash over TLS) in front of every API read, with
+  namespace invalidation on every write.
 - **Deployment:** Docker Compose locally; in production the backend runs on
   Render (Docker) and the frontend on Vercel, against managed MySQL on Aiven.
   See [Docs/Deployment.md](Docs/Deployment.md).
@@ -29,7 +31,8 @@ been idle.
 
 ```
 backend/            Django project (all backend code lives here)
-  config/           Settings, central env configuration, URL routing, HTTP helpers
+  config/           Settings, central env configuration, URL routing, HTTP
+                    helpers, the Redis response cache
   accounts/         Firebase authentication: token verification, the uid to
                     user link, the JWT middleware and the session API
   books/            Book catalogue, search and filtering
@@ -99,6 +102,9 @@ python -c "from django.core.management.utils import get_random_secret_key; print
 | `SESSION_COOKIE_AGE` | Guest cart session timeout (seconds) | `900` |
 | `FIREBASE_PROJECT_ID` | Firebase project whose ID tokens are accepted | *(empty)* |
 | `FIREBASE_TOKEN_LEEWAY` | Clock skew allowed when verifying a token (s) | `30` |
+| `REDIS_URL` | Redis cache connection URL (`rediss://…`) | *(empty, no caching)* |
+| `CACHE_ENABLED` | Serve API reads from the cache | `true` |
+| `REDIS_TIMEOUT` | Seconds to wait for Redis before reading MySQL | `2` |
 | `CSRF_TRUSTED_ORIGINS` | Trusted cross-origin origins | *(empty)* |
 | `HTTPS_ENABLED` | TLS terminated in front of Django | `false` |
 | `BACKUP_DIR` | Where backups are written | `backend/backups` |
@@ -182,6 +188,65 @@ and existing accounts can still be promoted in the Django admin at
 `is_staff` flag when its owner first signs in through Firebase, provided
 Firebase reports that email address as **verified** — which Google
 sign-in does, and an unverified email/password sign-up does not.
+
+## Caching
+
+Every API read is cached in Redis — Upstash in production, over its
+**TCP** endpoint (`rediss://`, TLS-only). `backend/config/cache.py` is
+the only module that touches the cache, and it is opt-in: with no
+`REDIS_URL` the cache backend is Django's dummy and every read goes to
+MySQL, which is how the test suite and a plain local checkout run.
+
+Set it up by copying the TCP URL from the Upstash console into
+`backend/.env`:
+
+```bash
+REDIS_URL=rediss://default:<password>@<endpoint>.upstash.io:6379
+```
+
+Responses carry an `X-Cache: HIT|MISS` header, so a cached read is
+visible in the browser's network panel or with `curl -i`.
+
+### What is cached, and for how long
+
+| Route | Time to live | Shared between callers |
+|---|---|---|
+| `GET /api/books/` | 60s | yes |
+| `GET /api/books/<id>/` | 120s | yes |
+| `GET /api/books/categories/` | 600s | yes |
+| `GET /api/reviews/?book=` | 60s | no — carries `can_review` and your own review |
+| `GET /api/cart/` | 30s | no |
+| `GET /api/orders/`, `/api/orders/<id>/` | 30s / 60s | no |
+| `GET /api/orders/availability/` | 15s | no |
+| `GET /api/admin/*` | 30s | yes, between administrators |
+| `GET /api/admin/reports/sales/` | 120s | yes, between administrators |
+
+Not cached: `GET /api/auth/session/` (the login check must reflect a
+disabled account or a dropped token on the very next request),
+`GET /api/csrf/` and `/healthz/`.
+
+### How it stays correct
+
+The TTLs above are the safety net, not the mechanism. Each cached view
+declares the **namespaces** its answer depends on (`books`, `orders`,
+`cart`, `reviews`, `customers`, `backups`), and every write calls
+`invalidate()` with what it changed — the same discipline as the
+frontend's `invalidateQueries`. A version token per namespace goes into
+the cache key, so replacing that token makes every entry built from it
+unreachable in a single Redis write, however many entries there are.
+
+Paying for an order, for instance, invalidates `orders`, `books` (stock
+was reserved) and `cart`, so the catalogue shows the new stock on the
+next request rather than up to a minute later.
+
+Two consequences worth knowing:
+
+- A write that bypasses the API — editing a book in the Django admin,
+  `manage.py seed_books` — does not invalidate anything, so its change
+  appears when the TTL lapses. That is why the TTLs are short.
+- A cache failure is a cache miss. Every operation is wrapped, so a Redis
+  timeout or outage makes the API slower, never broken. `CACHE_ENABLED=false`
+  turns caching off without removing the URL.
 
 ## Running it locally
 
@@ -300,7 +365,17 @@ npm run build
 ```
 
 `config.settings_test` never touches the development database, so it is
-safe to run with shared MySQL credentials configured.
+safe to run with shared MySQL credentials configured. It also disables
+response caching, so no test is served another test's answer; the caching
+behaviour itself is covered by `config/tests_cache.py` against a
+local-memory cache. To run those same tests through the production Redis
+backend:
+
+```bash
+redis-server --port 6399 --save '' --daemonize yes
+OBS_TEST_REDIS_URL=redis://127.0.0.1:6399/0 \
+    python manage.py test config.tests_cache --settings=config.settings_test
+```
 
 CI (`.github/workflows/main.yml`) runs the Django checks, a
 missing-migration check and the full suite against MySQL 8.0, then the
@@ -360,6 +435,7 @@ against the existing managed **Aiven MySQL** instance.
 |---|---|---|
 | Render service (Docker, env vars, health check) | `render.yaml` | yes |
 | Production backend values, for reference | `backend/.env.production.example` | yes, no secrets |
+| Redis cache (Upstash TCP endpoint) | `REDIS_URL` on Render | no, it is a secret |
 | Vercel build, `/api` rewrite, headers | `frontend/vercel.json` | yes |
 | Production frontend values | `frontend/.env.production` | yes, no secrets |
 
@@ -381,6 +457,9 @@ Values that must be set by hand after the first deploy:
 - the Vercel domain in the Firebase console, under **Authentication →
   Settings → Authorized domains** — Firebase refuses to sign anybody in
   from a domain not listed there;
+- the backend's `REDIS_URL` on Render → the Upstash database's **TCP**
+  endpoint (`rediss://…`, password included). Without it the API runs
+  uncached;
 - the backend's `CSRF_TRUSTED_ORIGINS` → the Vercel origin (the browser's
   origin is what Django's CSRF check sees, not the Render hostname);
 - the Aiven credentials, which Render prompts for as it reads `render.yaml`.

@@ -12,6 +12,13 @@ from django.db.models import Count, Max, Q, Sum
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 
+from config.cache import (
+    CUSTOMERS,
+    ORDERS,
+    TTL_ADMIN,
+    cached_json,
+    invalidate,
+)
 from config.http import json_error, read_json, staff_required_api
 from orders.models import Order
 from orders.serializers import serialize_order_summary
@@ -36,8 +43,11 @@ def _customer_queryset():
     )
 
 
+# ORDERS as well as CUSTOMERS: each row carries the customer's order
+# count, cancellations and lifetime spend.
 @require_GET
 @staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[CUSTOMERS, ORDERS])
 def customer_collection(request):
     """List customer accounts with their order totals."""
     customers = _customer_queryset()
@@ -75,6 +85,7 @@ def customer_collection(request):
 
 @require_GET
 @staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[CUSTOMERS, ORDERS])
 def customer_detail(request, pk):
     """One customer account with their recent orders."""
     customer = _customer_queryset().filter(pk=pk).first()
@@ -131,6 +142,7 @@ def customer_status(request, pk):
     customer.save(update_fields=["is_active"])
 
     refreshed = _customer_queryset().get(pk=customer.pk)
+    invalidate(CUSTOMERS)
 
     return JsonResponse(
         {"customer": serialize_customer(refreshed, customer_stats(refreshed))}

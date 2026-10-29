@@ -15,6 +15,14 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
 from books.models import Book
+from config.cache import (
+    BOOKS,
+    PER_CALLER,
+    REVIEWS,
+    TTL_REVIEWS,
+    cached_json,
+    invalidate,
+)
 from config.http import json_error, login_required_api, read_json
 
 from .models import Review
@@ -50,6 +58,10 @@ def review_collection(request):
     return _create_review(request)
 
 
+# PER_CALLER: the payload carries "can_review" and the caller's own
+# review, so it is not the same answer for two customers. BOOKS is in the
+# namespaces because the rating summary is derived from the book.
+@cached_json(TTL_REVIEWS, namespaces=[REVIEWS, BOOKS], scope=PER_CALLER)
 def _list_reviews(request):
     book_id, error = _parse_book_id(request.GET.get("book"))
 
@@ -138,6 +150,8 @@ def _create_review(request):
         # one loses and is told to edit the review that now exists.
         return json_error(already_reviewed, 409)
 
+    invalidate(REVIEWS)
+
     return JsonResponse(
         {
             "review": serialize_review(review, current_user=request.user),
@@ -168,6 +182,7 @@ def review_detail(request, pk):
 
     if request.method == "DELETE":
         review.delete()
+        invalidate(REVIEWS)
         return JsonResponse({"summary": rating_summary(book)})
 
     if not is_owner:
@@ -192,6 +207,7 @@ def review_detail(request, pk):
         setattr(review, field, value)
 
     review.save(update_fields=[*cleaned.keys(), "updated_at"])
+    invalidate(REVIEWS)
 
     return JsonResponse(
         {

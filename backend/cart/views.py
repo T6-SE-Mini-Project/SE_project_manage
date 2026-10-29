@@ -9,6 +9,15 @@ from django.views.decorators.http import (
 )
 
 from books.models import Book
+from config.cache import (
+    BOOKS,
+    CART,
+    PER_CALLER,
+    TTL_CART,
+    cached_json,
+    invalidate,
+)
+
 from .models import CartItem
 from .serializers import serialize_cart
 from .services import get_cart
@@ -16,6 +25,12 @@ from .services import get_cart
 
 def _cart_response(cart):
     return JsonResponse({"cart": serialize_cart(cart)})
+
+
+def _changed_cart_response(cart):
+    """Respond to a write, and drop the cached cart reads it invalidates."""
+    invalidate(CART)
+    return _cart_response(cart)
 
 
 def _read_json(request):
@@ -56,7 +71,9 @@ def _parse_positive_integer(value, field_name, default=None):
     return parsed, None
 
 
+# BOOKS as well as CART: every line carries its book's price and stock.
 @require_GET
+@cached_json(TTL_CART, namespaces=[CART, BOOKS], scope=PER_CALLER)
 def cart_detail(request):
     cart = get_cart(request)
     return _cart_response(cart)
@@ -119,7 +136,7 @@ def cart_item_add(request):
         item.quantity = new_quantity
         item.save(update_fields=["quantity", "updated_at"])
 
-    return _cart_response(cart)
+    return _changed_cart_response(cart)
 
 
 @require_http_methods(["PATCH", "PUT", "DELETE"])
@@ -137,7 +154,7 @@ def cart_item_detail(request, pk):
 
     if request.method == "DELETE":
         item.delete()
-        return _cart_response(cart)
+        return _changed_cart_response(cart)
 
     data, error_response = _read_json(request)
     if error_response is not None:
@@ -164,4 +181,4 @@ def cart_item_detail(request, pk):
     item.quantity = quantity
     item.save(update_fields=["quantity", "updated_at"])
 
-    return _cart_response(cart)
+    return _changed_cart_response(cart)

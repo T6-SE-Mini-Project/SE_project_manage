@@ -53,6 +53,7 @@ Two rules hold the whole thing together:
 | `settings.py` | Django settings, built from `env`. It never calls `os.environ`. |
 | `urls.py` | Mounts each app under `/api/<area>/`. |
 | `http.py` | Shared JSON helpers: `read_json`, `json_error`, `login_required_api`, `staff_required_api`. |
+| `cache.py` | **The only module that touches the cache.** The `cached_json` decorator, the namespaces, their time to live, and `invalidate`. |
 | `settings_test.py` | Test-only settings: an isolated SQLite database, so tests never touch the development MySQL database. |
 | `views.py` | Two infrastructure endpoints: `/api/csrf/` and the `/healthz/` liveness probe. |
 | `tests.py` | Covers the deployment-only settings, which no other test exercises because the suite runs with `DEBUG=true`. |
@@ -252,6 +253,50 @@ A subtlety worth knowing: `POST /api/auth/signin/` cycles the session key
 guest orders are keyed by it. That endpoint therefore calls
 `reassign_cart_session` and `claim_session_orders`. If you add anything
 else keyed by session, hand it over there too.
+
+### Caching
+
+Every API read is cached in Redis, and the rule for keeping it correct is
+the same one the frontend follows for its query cache: **a write
+invalidates what it changed.**
+
+A read declares what its answer depends on. `cached_json` goes *inside*
+the authorization decorators, so a 401 or 403 is never cached:
+
+```python
+@require_GET
+@staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[CUSTOMERS, ORDERS])
+def customer_collection(request):
+    ...
+```
+
+- **`namespaces`** are the bodies of data the response is built from.
+  Name every one: the customer list carries order aggregates, so it
+  depends on `ORDERS` as well as `CUSTOMERS`, and a new order must change
+  it.
+- **`scope`** is who may be served the same bytes. The default `SHARED`
+  is for an answer that is identical for everyone allowed to see it.
+  `PER_CALLER` is for anything that embeds the caller — a cart, an order
+  history, a review list with `can_review` — and keys the entry by both
+  the account and the session.
+
+A write then names what it touched:
+
+```python
+# Cancelling releases the stock the order reserved.
+invalidate(ORDERS, BOOKS)
+```
+
+Getting this wrong is how a customer sees stale stock, so when you add an
+endpoint, ask the two questions in order: *what does this answer depend
+on* (the namespaces), and *whose answer is it* (the scope). If a field in
+the payload comes from a model no namespace covers, the response is not
+cacheable yet — add a namespace for it and invalidate it on its writes.
+
+Two things deliberately have no cache: `GET /api/auth/session/`, because
+the login check must reflect a disabled account on the very next request,
+and `GET /api/csrf/`, because it issues a token.
 
 ---
 

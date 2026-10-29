@@ -3,6 +3,17 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods, require_POST
 
 from cart.services import get_cart
+from config.cache import (
+    BOOKS,
+    CART,
+    ORDERS,
+    PER_CALLER,
+    TTL_AVAILABILITY,
+    TTL_ORDER_DETAIL,
+    TTL_ORDER_HISTORY,
+    cached_json,
+    invalidate,
+)
 from config.http import json_error, read_json
 
 from .models import Order
@@ -53,6 +64,7 @@ def _get_scoped_order(request, pk):
 
 
 @require_http_methods(["GET", "POST"])
+@cached_json(TTL_ORDER_HISTORY, namespaces=[ORDERS], scope=PER_CALLER)
 def order_collection(request):
     """GET lists this customer's order history; POST places a new order."""
     if request.method == "GET":
@@ -80,13 +92,18 @@ def order_collection(request):
             availability=problems,
         )
 
+    invalidate(ORDERS)
+
     return JsonResponse(
         {"order": serialize_order(order)},
         status=201,
     )
 
 
+# The pre-checkout check reads the cart against current stock, so both
+# namespaces decide the answer, and the TTL is the shortest in the project.
 @require_http_methods(["GET"])
+@cached_json(TTL_AVAILABILITY, namespaces=[CART, BOOKS], scope=PER_CALLER)
 def order_availability(request):
     """Report availability problems for the current cart (pre-checkout)."""
     cart = get_cart(request)
@@ -101,6 +118,7 @@ def order_availability(request):
 
 
 @require_http_methods(["GET"])
+@cached_json(TTL_ORDER_DETAIL, namespaces=[ORDERS], scope=PER_CALLER)
 def order_detail(request, pk):
     order = _get_scoped_order(request, pk)
 
@@ -135,5 +153,9 @@ def order_cancel(request, pk):
     cancelled = (
         Order.objects.prefetch_related("items").get(pk=cancelled.pk)
     )
+
+    # Cancelling releases the stock the order reserved, so the catalogue
+    # changed too.
+    invalidate(ORDERS, BOOKS)
 
     return JsonResponse({"order": serialize_order(cancelled)})

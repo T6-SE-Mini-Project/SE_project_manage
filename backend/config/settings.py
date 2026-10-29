@@ -107,6 +107,46 @@ DATABASES = {
 }
 
 
+# Cache
+#
+# Redis when REDIS_URL is set (Upstash in production, over TLS), and
+# Django's dummy backend otherwise, so an unconfigured deployment reads
+# from MySQL instead of from a per-worker cache that cannot be invalidated
+# across workers. config/cache.py is the only module that uses it.
+if env.REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": env.REDIS_URL,
+            "OPTIONS": {
+                # Forwarded to redis.ConnectionPool.from_url. The two
+                # timeouts are what stop a struggling cache from holding
+                # requests open; config/cache.py turns the resulting
+                # errors into cache misses.
+                "socket_connect_timeout": env.REDIS_TIMEOUT,
+                "socket_timeout": env.REDIS_TIMEOUT,
+                "retry_on_timeout": True,
+                # Upstash drops idle connections; this re-checks one
+                # before it is handed to a request.
+                "health_check_interval": 30,
+                # Each gunicorn worker holds its own pool, so keep the
+                # total within the plan's connection limit.
+                "max_connections": 16,
+            },
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.dummy.DummyCache",
+        }
+    }
+
+# Read by config/cache.py on every cached view. Setting CACHE_ENABLED=false
+# turns response caching off without removing REDIS_URL.
+CACHE_ENABLED = env.CACHE_ENABLED
+
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {

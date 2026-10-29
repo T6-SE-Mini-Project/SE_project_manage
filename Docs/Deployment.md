@@ -76,6 +76,7 @@ file, always re-check with
    | `DB_SSL_CA` | leave empty for now — see *Harden the database connection* |
    | `CSRF_TRUSTED_ORIGINS` | leave empty for now — filled in step 3 |
    | `FIREBASE_PROJECT_ID` | the Firebase project id, same as the Vercel build's `VITE_FIREBASE_PROJECT_ID` |
+   | `REDIS_URL` | Upstash's **TCP** endpoint, `rediss://default:<password>@<endpoint>.upstash.io:6379` |
 
    `FIREBASE_PROJECT_ID` is what every ID token is checked against: without it
    the API answers every sign-in with *"Authentication is not configured on the
@@ -151,6 +152,36 @@ man-in-the-middle. To verify it as well:
 - Scheduled backups need a Render cron job, which is a paid feature. A ready
   definition is commented out at the bottom of `render.yaml`.
 
+### Add the Redis cache (Upstash)
+
+Every API read is cached (see [Caching](../README.md#caching)), which is
+what keeps the catalogue quick when the database is a managed instance in
+another data centre.
+
+1. Create a database in the [Upstash console](https://console.upstash.com/).
+   Pick the region closest to the Render service — the cache is only worth
+   having if reaching it is faster than reaching Aiven.
+2. On the database page, under **Connect**, take the **TCP** / `redis-cli`
+   endpoint, not the REST URL. It is TLS-only, so it starts with
+   `rediss://` and contains the password.
+3. Render → service → **Environment** → set `REDIS_URL` to it.
+
+Leaving `REDIS_URL` empty is a supported deployment: the cache backend
+becomes Django's dummy and every read goes to MySQL. `CACHE_ENABLED=false`
+does the same without clearing the URL.
+
+Verify it from the browser's network panel or with curl — the second call
+reports a hit:
+
+```bash
+curl -si https://bookstore-api-7g5z.onrender.com/api/books/ | grep -i x-cache
+```
+
+Upstash's free plan caps the number of commands per day. A cached read
+costs two (one to read the namespace tokens, one to read the entry), and
+a write one per namespace it invalidates, so a demo deployment stays well
+inside it.
+
 ## 2. Frontend on Vercel
 
 1. Vercel: **Add New → Project**, select the repo.
@@ -224,6 +255,7 @@ Everything is read in one place per side — `backend/config/env.py` and
 | `backend/.env` | Local development values | **no** (git-ignored) |
 | `frontend/vercel.json` | Vercel build + `/api` rewrite + headers | yes |
 | `frontend/.env.production` | `VITE_API_BASE_URL=/api` for `vite build`, plus empty `VITE_FIREBASE_*` placeholders the dashboard overrides | yes, no secrets |
+| Redis cache | `REDIS_URL` on Render (Upstash TCP endpoint) | no, it is a secret |
 | `frontend/.env` | Local development values | **no** (git-ignored) |
 
 Production-only settings (all in `backend/config/settings.py`, active when
@@ -253,6 +285,9 @@ it is set, so the loop cannot be reintroduced unnoticed.
 | `401 "The sign-in token was issued for a different application"` | Render's `FIREBASE_PROJECT_ID` and the bundle's `VITE_FIREBASE_PROJECT_ID` differ | Make them the same project |
 | `auth/unauthorized-domain` from the Google popup | the site's domain is not authorized in Firebase | Firebase console → Authentication → Settings → Authorized domains |
 | The Manage tab never appears for your account | Firebase accounts are created as customers | `python manage.py grant_admin <email>` |
+| A change made in the Django admin does not show in the app | admin writes bypass the API, so nothing invalidates the cache | Wait for the TTL (60s for the catalogue), or make the change through the admin API |
+| Responses have no `X-Cache` header | `REDIS_URL` unset, `CACHE_ENABLED=false`, or the route is deliberately uncached | Check both variables; the session, CSRF and health routes are never cached |
+| Everything works but is slow, with `X-Cache: MISS` throughout | Redis is unreachable and every operation is degrading to a miss | Check `REDIS_URL` and the Upstash database's status; the API stays correct meanwhile |
 | `400 Bad Request` / `DisallowedHost` | Host not permitted | Add the domain to `DJANGO_ALLOWED_HOSTS` |
 | Login succeeds, next request is `401` | Frontend is calling the API cross-origin | `VITE_API_BASE_URL` must be `/api`; the rewrite does the routing |
 | `500` on any page, `Missing staticfiles manifest` | `collectstatic` did not run | It runs in `entrypoint.sh`; check the deploy log for the `==> collectstatic` line |

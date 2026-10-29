@@ -65,6 +65,19 @@ services:
       - key: FIREBASE_PROJECT_ID
         sync: false
 
+      # --- Redis cache (Upstash) ---------------------------------------------
+      # Upstash's TCP endpoint, TLS-only, password included -- so it is a
+      # secret and Render prompts for it. Empty disables caching and the API
+      # reads from MySQL, which is a safe but slower deployment.
+      #   rediss://default:<password>@<endpoint>.upstash.io:6379
+      - key: REDIS_URL
+        sync: false
+
+      # Kill switch, so caching can be turned off from the dashboard
+      # without clearing the URL above.
+      - key: CACHE_ENABLED
+        value: "true"
+
       # --- Managed MySQL (Aiven) -------------------------------------------
       - key: DB_NAME
         sync: false
