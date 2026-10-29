@@ -237,3 +237,82 @@ class CartApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response["Content-Type"], "application/json")
+
+
+
+class Task19SecurityObjectiveTests(CartApiTests):
+    """Focused security objective validation for Task #19."""
+    def test_025_other_session_cannot_read_another_carts_item(self):
+        self.add_item({"book_id": self.book.pk})
+
+        original_cart = self.current_cart()
+        self.assertEqual(len(original_cart["items"]), 1)
+
+        # A separate session must receive its own empty cart.
+        other_client = Client()
+        response = other_client.get(reverse("cart_detail"))
+
+        self.assertEqual(response.status_code, 200)
+        other_cart = response.json()["cart"]
+        self.assertEqual(other_cart["items"], [])
+
+        # Confirm the original session's data remains intact.
+        original_cart_after = self.current_cart()
+        self.assertEqual(len(original_cart_after["items"]), 1)
+        self.assertEqual(
+            original_cart_after["items"][0]["quantity"], 1
+        )
+
+
+    def test_026_other_session_cannot_modify_cart_item(self):
+        self.add_item({"book_id": self.book.pk})
+        item_id = self.current_cart()["items"][0]["id"]
+
+        other_client = Client()
+        response = other_client.patch(
+            reverse("cart_item_detail", args=[item_id]),
+            data=json.dumps({"quantity": 3}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+        # Verify persisted data, not just the response.
+        from .models import CartItem
+
+        item = CartItem.objects.get(pk=item_id)
+        self.assertEqual(item.quantity, 1)
+
+    def test_027_anonymous_user_can_access_public_catalogue(self):
+        response = self.client.get(reverse("book_list"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_027_authenticated_customer_can_access_catalogue(self):
+        user = get_user_model().objects.create_user(
+            username="task19customer",
+            password="StrongPass123!",
+        )
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("book_list"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_027_anonymous_user_cannot_access_protected_page(self):
+        response = self.client.get(reverse("login_success"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(
+            reverse("customer_login"),
+            response.url,
+        )
+
+    def test_027_authenticated_customer_can_access_protected_page(self):
+        user = get_user_model().objects.create_user(
+            username="task19protected",
+            password="StrongPass123!",
+        )
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("login_success"))
+
+        self.assertEqual(response.status_code, 200)

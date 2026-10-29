@@ -61,3 +61,38 @@ npm run build
 - **TC-OBS-022 scope:** the browser verification was performed as a guest. `CartApiTests.test_authenticated_cart_is_linked_to_user` verifies API-level cart association when an authenticated Django session is present. It is not an end-to-end browser test. The React app has no login UI and does not integrate directly with the Django login page, so the registered-customer flow required by TC-OBS-022 has not been verified end to end.
 - The cart is session-based and also associates with the authenticated user when a Django session is present. `CartApiTests.test_authenticated_cart_is_linked_to_user` covers registered-customer association.
 - Prices are displayed in USD via `Intl.NumberFormat`; this is an assumption because the SRS does not specify a currency.
+
+
+## Task #19 — Security Objective Validation
+
+- **Branch:** `feature/issue-3-security-controls`
+- **Test environment:** Windows, Python 3.13.14, Django 5.2.18, isolated in-memory SQLite via `config.settings_test`
+- **Scope:** Confidentiality, integrity, authentication and authorization checks for the implemented cart and account functionality.
+
+### Test-case results
+
+| Test case | Objective | Evidence | Result |
+|---|---|---|---|
+| TC-OBS-025 | Confidentiality | `cart.tests.Task19SecurityObjectiveTests.test_025_other_session_cannot_read_another_carts_item` — a separate session receives an empty cart; the original session's cart remains intact. | Pass for cart session isolation; order confidentiality unverified. |
+| TC-OBS-026 | Integrity | `cart.tests.Task19SecurityObjectiveTests.test_026_other_session_cannot_modify_cart_item` — a cross-session PATCH receives HTTP 404, and the stored cart-item quantity remains unchanged. | Pass for cart-item isolation; other protected data updates and order/payment changes unverified. |
+| TC-OBS-027 | Authentication and authorization | `cart.tests.Task19SecurityObjectiveTests.test_027_anonymous_user_cannot_access_protected_page`, `test_027_authenticated_customer_can_access_protected_page`, and the existing login/admin authorization tests. | Pass for tested account and admin routes. |
+
+### Commands and actual results
+
+```powershell
+.\.venv\Scripts\python.exe manage.py test cart.tests.Task19SecurityObjectiveTests --settings=config.settings_test -v 2
+# Ran 22 tests in 0.172s
+# OK
+
+.\.venv\Scripts\python.exe manage.py test accounts.tests.CustomerLoginTests accounts.tests.AdminAuthorizationTests --settings=config.settings_test -v 2
+# Ran 9 tests in 0.080s
+# OK
+```
+
+### Limitations and follow-up
+
+- The tests use an isolated in-memory SQLite database and do not modify the development database.
+- The confidentiality and integrity tests cover session-scoped shopping carts. They do not establish protection of customer order records.
+- No order-management endpoint or order model was identified in the inspected implementation. Order-related security validation remains unverified.
+- The authentication checks cover the Django login-success page and admin route. The catalogue is public, so its successful access by anonymous users is expected.
+- Results establish the behavior of the tested code paths, not the security of every application endpoint or a production deployment.
