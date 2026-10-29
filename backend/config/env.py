@@ -31,6 +31,10 @@ FIREBASE_PUBLIC_KEYS_URL    Where Google publishes the signing certs  Google's U
 REDIS_URL                   Redis cache connection URL                *(empty)*
 CACHE_ENABLED               Serve API reads from the cache            ``true``
 REDIS_TIMEOUT               Socket timeout for cache operations (s)   ``2``
+THROTTLE_ENABLED            Enforce API rate limits                   ``true``
+THROTTLE_READ_RATE          Reads per caller per minute                ``300``
+THROTTLE_WRITE_RATE         Writes per caller per minute                ``60``
+TRUSTED_PROXY_COUNT         Proxies in front of this service            ``0``
 CSRF_TRUSTED_ORIGINS        Comma-separated trusted CSRF origins      the Vercel site
 HTTPS_ENABLED               Terminate TLS in front of Django          ``false``
 BACKUP_DIR                  Where order/inventory backups are kept    ``<backend>/backups``
@@ -278,6 +282,41 @@ CACHE_ENABLED = env_bool("CACHE_ENABLED", default=True) and bool(REDIS_URL)
 # cache miss costs one database query; a slow cache would otherwise cost
 # every request its own stall, so this is deliberately impatient.
 REDIS_TIMEOUT = env_int("REDIS_TIMEOUT", default=2)
+
+
+# --- Rate limiting -----------------------------------------------------------
+
+# Whether the API enforces per-caller rate limits (config/throttle.py).
+# On by default, because the endpoints worth limiting -- sign-in, which
+# creates accounts, and payment, which takes card numbers -- are reachable
+# by anyone who can reach the site. The counters live in Redis when
+# REDIS_URL is set and in each worker's memory otherwise, which still
+# limits, just per process.
+THROTTLE_ENABLED = env_bool("THROTTLE_ENABLED", default=True)
+
+# Requests per caller per minute. A caller is a Firebase uid when the
+# request carries a token, and an IP address otherwise.
+#
+# Reads are generous: one page of the catalogue makes several, and most of
+# them are answered from the cache. Writes are not, because each one costs
+# a transaction and nothing a customer does by hand needs more.
+THROTTLE_READ_RATE = env_int("THROTTLE_READ_RATE", default=300)
+THROTTLE_WRITE_RATE = env_int("THROTTLE_WRITE_RATE", default=60)
+
+# How many proxies sit in front of this service. This decides which entry
+# of X-Forwarded-For is believed, and getting it wrong breaks rate
+# limiting in one of two ways:
+#
+#   too low  -- every anonymous caller behind the proxy shares one bucket,
+#               so one busy visitor can rate-limit everybody;
+#   too high -- the client's own X-Forwarded-For value is believed, so a
+#               caller can rotate fake addresses and never be limited.
+#
+# 0 ignores the header and uses the socket address, which is right for
+# local work and for Docker Compose. The deployed stack is
+# browser -> Vercel -> Render, so production sets 2. Count the hops from
+# the service outwards, not the other way round.
+TRUSTED_PROXY_COUNT = env_int("TRUSTED_PROXY_COUNT", default=0)
 
 
 # --- Deployment / HTTPS --------------------------------------------------------

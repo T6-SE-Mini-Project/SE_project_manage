@@ -24,6 +24,7 @@ from config.cache import (
     invalidate,
 )
 from config.http import json_error, login_required_api, read_json
+from config.throttle import RATE_REVIEW, throttle
 
 from .models import Review
 from .serializers import serialize_review
@@ -106,6 +107,7 @@ def _list_reviews(request):
 
 
 @login_required_api
+@throttle(RATE_REVIEW, scope="review")
 def _create_review(request):
     data, error_response = read_json(request)
     if error_response is not None:
@@ -163,6 +165,7 @@ def _create_review(request):
 
 @require_http_methods(["PATCH", "PUT", "DELETE"])
 @login_required_api
+@throttle(RATE_REVIEW, scope="review")
 def review_detail(request, pk):
     review = (
         Review.objects.select_related("book", "user").filter(pk=pk).first()

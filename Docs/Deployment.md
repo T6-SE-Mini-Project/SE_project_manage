@@ -77,6 +77,7 @@ file, always re-check with
    | `CSRF_TRUSTED_ORIGINS` | leave empty for now — filled in step 3 |
    | `FIREBASE_PROJECT_ID` | the Firebase project id, same as the Vercel build's `VITE_FIREBASE_PROJECT_ID` |
    | `REDIS_URL` | Upstash's **TCP** endpoint, `rediss://default:<password>@<endpoint>.upstash.io:6379` |
+   | `TRUSTED_PROXY_COUNT` | `2` — see *Rate limiting behind the proxy* |
 
    `FIREBASE_PROJECT_ID` is what every ID token is checked against: without it
    the API answers every sign-in with *"Authentication is not configured on the
@@ -180,7 +181,37 @@ curl -si https://bookstore-api-7g5z.onrender.com/api/books/ | grep -i x-cache
 Upstash's free plan caps the number of commands per day. A cached read
 costs two (one to read the namespace tokens, one to read the entry), and
 a write one per namespace it invalidates, so a demo deployment stays well
-inside it.
+inside it. Rate limiting adds two more commands per request, in the same
+database.
+
+### Rate limiting behind the proxy
+
+The API limits requests per caller (see
+[Rate limiting](../README.md#rate-limiting)), and for anonymous callers
+that means per client address — so this deployment has to be told how to
+find the client address.
+
+`/api/*` is rewritten by Vercel, so every request reaches Django from
+Vercel's edge: `REMOTE_ADDR` is Vercel, and the real client is in
+`X-Forwarded-For`. **Set `TRUSTED_PROXY_COUNT=2` on Render** (browser →
+Vercel → Render), which takes the address two entries from the right-hand
+end of that header and ignores anything the client put in front of it.
+
+- Left at `0`, every anonymous visitor shares one bucket, and a handful of
+  them together can get the whole site `429`-ed.
+- Set higher than the real chain, a client can spoof `X-Forwarded-For`
+  and never be limited.
+
+If a proxy is ever added or removed in front of the service, this number
+changes with it. `config/tests.py` pins the expected value for this
+deployment so a change is deliberate.
+
+The limits themselves need no configuration;
+`THROTTLE_READ_RATE=300` and `THROTTLE_WRITE_RATE=60` per caller per
+minute are the defaults, and `THROTTLE_ENABLED=false` turns enforcement
+off entirely. Counters live in the same Upstash database as the cache,
+which is what makes a limit apply across Render's workers rather than per
+process.
 
 ## 2. Frontend on Vercel
 
@@ -288,6 +319,9 @@ it is set, so the loop cannot be reintroduced unnoticed.
 | A change made in the Django admin does not show in the app | admin writes bypass the API, so nothing invalidates the cache | Wait for the TTL (60s for the catalogue), or make the change through the admin API |
 | Responses have no `X-Cache` header | `REDIS_URL` unset, `CACHE_ENABLED=false`, or the route is deliberately uncached | Check both variables; the session, CSRF and health routes are never cached |
 | Everything works but is slow, with `X-Cache: MISS` throughout | Redis is unreachable and every operation is degrading to a miss | Check `REDIS_URL` and the Upstash database's status; the API stays correct meanwhile |
+| `429 "Too many requests"` during ordinary browsing, for everyone at once | `TRUSTED_PROXY_COUNT` is too low, so every visitor is counted as Vercel's edge address | Set `TRUSTED_PROXY_COUNT=2` on Render |
+| `429` on `/api/auth/signin/` only | 30 sign-ins a minute from one address — a retry loop, or several people on one connection | Check `Retry-After`; if it is a loop, look at the browser console rather than raising the limit |
+| A limit never seems to apply | `THROTTLE_ENABLED=false`, or `REDIS_URL` is unset so each worker counts separately | Check both; without Redis the limit is per worker process |
 | `400 Bad Request` / `DisallowedHost` | Host not permitted | Add the domain to `DJANGO_ALLOWED_HOSTS` |
 | Login succeeds, next request is `401` | Frontend is calling the API cross-origin | `VITE_API_BASE_URL` must be `/api`; the rewrite does the routing |
 | `500` on any page, `Missing staticfiles manifest` | `collectstatic` did not run | It runs in `entrypoint.sh`; check the deploy log for the `==> collectstatic` line |

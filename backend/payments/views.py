@@ -3,6 +3,7 @@ from django.views.decorators.http import require_POST
 
 from config.cache import BOOKS, CART, ORDERS, invalidate
 from config.http import json_error, read_json
+from config.throttle import RATE_PAYMENT, throttle
 from orders.models import Order
 from orders.serializers import serialize_order
 
@@ -10,7 +11,11 @@ from .serializers import serialize_payment
 from .services import process_order_payment
 
 
+# The tightest limit in the project: repeated attempts against a payment
+# endpoint are how stolen card numbers are tested, and a customer retrying
+# a declined card needs a handful, not ten a minute.
 @require_POST
+@throttle(RATE_PAYMENT, scope="payment")
 def payment_create(request):
     """Process payment for an order and confirm it on success."""
     data, error_response = read_json(request)

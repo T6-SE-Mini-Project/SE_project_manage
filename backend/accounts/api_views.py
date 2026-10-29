@@ -26,6 +26,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from cart.services import reassign_cart_session
 from config.http import json_error
+from config.throttle import ADDRESS, RATE_SIGNIN, throttle
 from orders.services import claim_session_orders
 
 from .middleware import SESSION_UID_KEY
@@ -52,7 +53,10 @@ def session_detail(request):
     )
 
 
+# Counted per address, not per account: every abusive sign-up arrives
+# with a uid of its own, so a per-account limit would count nothing.
 @require_POST
+@throttle(RATE_SIGNIN, scope="signin", by=ADDRESS)
 def session_create(request):
     """Register a Firebase sign-in and keep the customer's guest work.
 

@@ -311,6 +311,28 @@ def run_checks():
         check("the session endpoint is not cached",
               customer.last_headers.get("X-Cache"), None)
 
+    print("\n== Rate limiting ==")
+    limiter = Client("limits")
+    limiter.call("GET", "/api/books/")
+    limit = limiter.last_headers.get("X-RateLimit-Limit")
+
+    if limit is None:
+        print("  [SKIP] rate limiting is off on this deployment")
+    else:
+        print(f"  read limit={limit}")
+        first = int(limiter.last_headers.get("X-RateLimit-Remaining", -1))
+        limiter.call("GET", "/api/books/")
+        second = int(limiter.last_headers.get("X-RateLimit-Remaining", -1))
+        # The counter must move, otherwise the limit is being written
+        # somewhere that is never read back.
+        check("a second read spends one of the allowance", second, first - 1)
+
+        # Health must stay uncounted, or a burst of traffic makes the
+        # platform think the service is down.
+        limiter.call("GET", "/healthz/")
+        check("the health check is not rate limited",
+              limiter.last_headers.get("X-RateLimit-Limit"), None)
+
     print("\n== Issue #18: backups ==")
     status, backups = admin.call("GET", "/api/admin/backups/")
     check("backup endpoint", status, 200)

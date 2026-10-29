@@ -34,10 +34,20 @@ DATABASES = {
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.dummy.DummyCache",
-    }
+    },
+    "throttle": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "obs-throttle-tests",
+    },
 }
 
 CACHE_ENABLED = False
+
+# No rate limiting in the suite either: tests share a process, so one
+# test's requests would count against the next one's and the failure would
+# depend on the order they ran in. config/tests_throttle.py turns it on
+# explicitly and clears the counters around each test.
+THROTTLE_ENABLED = False
 
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.MD5PasswordHasher",

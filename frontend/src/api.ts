@@ -45,6 +45,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Whether a failed request is worth retrying.
+ *
+ * A 4xx will not become a 2xx by being asked again: the request is wrong,
+ * the caller is not allowed, or — for `429` — they have already made too
+ * many, and a retry spends the next window's allowance as well. Network
+ * failures and 5xx are worth one more attempt.
+ */
+export function shouldRetry(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status < 500) {
+    return false;
+  }
+  return failureCount < 1;
+}
+
 function readCookie(name: string): string {
   const match = document.cookie.match(
     new RegExp(`(^|;\\s*)${name}=([^;]*)`),

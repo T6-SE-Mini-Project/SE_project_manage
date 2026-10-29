@@ -90,6 +90,9 @@ class ProductionSettingsTests(SimpleTestCase):
         "DB_CONN_MAX_AGE": "60",
         # Upstash's TCP endpoint is TLS-only, hence rediss://.
         "REDIS_URL": "rediss://default:not-a-real-password@example.upstash.io:6379",
+        # browser -> Vercel -> Render, so the client address is the second
+        # entry from the right of X-Forwarded-For.
+        "TRUSTED_PROXY_COUNT": "2",
         # Render injects this; config/env.py must fold it into ALLOWED_HOSTS.
         "RENDER_EXTERNAL_HOSTNAME": "bookstore-api.onrender.com",
     }
@@ -117,6 +120,12 @@ print(json.dumps({
     "cache_location": s.CACHES["default"].get("LOCATION"),
     "cache_options": s.CACHES["default"].get("OPTIONS", {}),
     "cache_enabled": s.CACHE_ENABLED,
+    "throttle_cache": s.CACHES.get("throttle", {}).get("BACKEND"),
+    "throttle_enabled": s.THROTTLE_ENABLED,
+    "throttle_read_rate": s.THROTTLE_READ_RATE,
+    "throttle_write_rate": s.THROTTLE_WRITE_RATE,
+    "trusted_proxy_count": s.TRUSTED_PROXY_COUNT,
+    "middleware": list(s.MIDDLEWARE),
 }))
 """
 
@@ -234,6 +243,54 @@ print(json.dumps({
         self.assertEqual(
             settings["cache_backend"],
             "django.core.cache.backends.redis.RedisCache",
+        )
+
+    def test_rate_limiting_is_on_in_production(self):
+        settings = self.load_settings()
+
+        self.assertTrue(settings["throttle_enabled"])
+        self.assertEqual(settings["throttle_read_rate"], 300)
+        self.assertEqual(settings["throttle_write_rate"], 60)
+        self.assertIn(
+            "config.throttle.RateLimitMiddleware", settings["middleware"]
+        )
+
+    def test_rate_limiting_is_on_even_without_a_cache(self):
+        # The counters fall back to each worker's memory rather than the
+        # dummy backend: a limit per process still limits, while a dummy
+        # backend would silently count nothing and look like it worked.
+        settings = self.load_settings(REDIS_URL="")
+
+        self.assertTrue(settings["throttle_enabled"])
+        self.assertEqual(
+            settings["throttle_cache"],
+            "django.core.cache.backends.locmem.LocMemCache",
+        )
+
+    def test_the_counter_store_uses_redis_when_configured(self):
+        self.assertEqual(
+            self.load_settings()["throttle_cache"],
+            "django.core.cache.backends.redis.RedisCache",
+        )
+
+    def test_the_deployment_knows_how_many_proxies_are_in_front_of_it(self):
+        # At 0, REMOTE_ADDR is Vercel's edge and every anonymous caller
+        # shares one rate-limit bucket; too high and a client can spoof
+        # X-Forwarded-For and never be limited. This deployment is
+        # browser -> Vercel -> Render.
+        self.assertEqual(self.load_settings()["trusted_proxy_count"], 2)
+
+    def test_rate_limiting_runs_after_authentication(self):
+        # Order is load-bearing: a signed-in caller must be counted by
+        # their Firebase uid, not lumped in with everybody else behind the
+        # Vercel proxy.
+        middleware = self.load_settings()["middleware"]
+
+        self.assertGreater(
+            middleware.index("config.throttle.RateLimitMiddleware"),
+            middleware.index(
+                "accounts.middleware.FirebaseAuthenticationMiddleware"
+            ),
         )
 
     def test_platform_hostname_is_added_to_allowed_hosts(self):

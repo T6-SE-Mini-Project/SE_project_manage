@@ -78,6 +78,22 @@ services:
       - key: CACHE_ENABLED
         value: "true"
 
+      # --- Rate limiting ------------------------------------------------------
+      - key: THROTTLE_ENABLED
+        value: "true"
+      - key: THROTTLE_READ_RATE
+        value: "300"
+      - key: THROTTLE_WRITE_RATE
+        value: "60"
+
+      # Two proxies sit in front of this service: Vercel's edge rewrites
+      # /api/* to it, and Render's own proxy terminates TLS. So the
+      # customer's address is the second entry from the right of
+      # X-Forwarded-For. At 0 every anonymous caller would share one rate
+      # limit bucket, because REMOTE_ADDR is Vercel, not the customer.
+      - key: TRUSTED_PROXY_COUNT
+        value: "2"
+
       # --- Managed MySQL (Aiven) -------------------------------------------
       - key: DB_NAME
         sync: false

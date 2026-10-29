@@ -130,23 +130,42 @@ def _create_identity(profile):
     )
 
 
-def identity_for_claims(claims):
+def identity_for_uid(uid):
+    """Return the stored identity for a Firebase uid, creating nothing.
+
+    Separate from :func:`identity_for_claims` so a caller can find out
+    whether a token belongs to a known account *before* an account is
+    created for it. That is what lets the middleware rate-limit account
+    creation without paying for a second query on every other request.
+    """
+    if not uid:
+        return None
+
+    return (
+        FirebaseIdentity.objects.select_related("user")
+        .filter(uid=uid)
+        .first()
+    )
+
+
+def identity_for_claims(claims, identity=None):
     """Return the :class:`FirebaseIdentity` for a verified token.
 
     Creates the Django user on the customer's first sign-in and keeps the
     stored profile in step with Firebase on every later one. The uid is
     the only thing matched on, so changing an email address in Firebase
     moves the address rather than creating a second account.
+
+    ``identity`` is the row the caller already fetched with
+    :func:`identity_for_uid`, when it has one, so the lookup is not
+    repeated.
     """
     profile = profile_from_claims(claims)
     if not profile["uid"]:
         raise ValueError("A Firebase token with no uid cannot identify a user.")
 
-    identity = (
-        FirebaseIdentity.objects.select_related("user")
-        .filter(uid=profile["uid"])
-        .first()
-    )
+    if identity is None:
+        identity = identity_for_uid(profile["uid"])
 
     if identity is None:
         try:

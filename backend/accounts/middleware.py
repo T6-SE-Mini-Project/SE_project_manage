@@ -28,8 +28,17 @@ lapsed, refresh it" apart from "you are not signed in".
 
 from config.http import json_error
 
+from config.throttle import (
+    ADDRESS,
+    RATE_SIGNIN,
+    consume,
+    limit_key,
+    throttling_enabled,
+    too_many,
+)
+
 from .firebase import FirebaseAuthError, bearer_token, verify_id_token
-from .services import identity_for_claims
+from .services import identity_for_claims, identity_for_uid
 
 # Session key under which the signed-in Firebase uid is remembered. The
 # session itself no longer authenticates anybody; this records *whose*
@@ -57,7 +66,23 @@ class FirebaseAuthenticationMiddleware:
         except FirebaseAuthError as exc:
             return json_error(str(exc), 401, code="invalid_token")
 
-        identity = identity_for_claims(claims)
+        identity = identity_for_uid(str(claims.get("sub", "")))
+
+        if identity is None:
+            # This token belongs to no account yet, so serving it means
+            # creating one. That is the abusable step — anyone who can
+            # register in Firebase can mint an unlimited supply of fresh
+            # uids — so it is limited here, where the account is actually
+            # created, rather than only on the sign-in endpoint. Counted
+            # per address, because each attempt brings a uid of its own.
+            if throttling_enabled():
+                allowed, _, retry_after = consume(
+                    "signup", limit_key(request, ADDRESS), RATE_SIGNIN
+                )
+                if not allowed:
+                    return too_many(retry_after, RATE_SIGNIN)
+
+        identity = identity_for_claims(claims, identity=identity)
 
         if not identity.user.is_active:
             # An administrator has disabled this customer. Firebase still

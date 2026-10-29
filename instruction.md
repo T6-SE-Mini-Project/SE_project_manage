@@ -54,6 +54,7 @@ Two rules hold the whole thing together:
 | `urls.py` | Mounts each app under `/api/<area>/`. |
 | `http.py` | Shared JSON helpers: `read_json`, `json_error`, `login_required_api`, `staff_required_api`. |
 | `cache.py` | **The only module that touches the cache.** The `cached_json` decorator, the namespaces, their time to live, and `invalidate`. |
+| `throttle.py` | **The only module that counts requests.** The blanket middleware, the `throttle` decorator, and the limits themselves. |
 | `settings_test.py` | Test-only settings: an isolated SQLite database, so tests never touch the development MySQL database. |
 | `views.py` | Two infrastructure endpoints: `/api/csrf/` and the `/healthz/` liveness probe. |
 | `tests.py` | Covers the deployment-only settings, which no other test exercises because the suite runs with `DEBUG=true`. |
@@ -297,6 +298,53 @@ cacheable yet — add a namespace for it and invalidate it on its writes.
 Two things deliberately have no cache: `GET /api/auth/session/`, because
 the login check must reflect a disabled account on the very next request,
 and `GET /api/csrf/`, because it issues a token.
+
+### Rate limiting
+
+`RateLimitMiddleware` already counts every request — a generous limit for
+reads, a tighter one for writes — so a new endpoint is limited the moment
+it exists and needs nothing added.
+
+Reach for `@throttle` only when *attempts* are the thing worth limiting
+rather than volume: signing in, paying, posting a review. It goes below
+the authorization decorators and above `cached_json`, so a refused
+request is not served from the cache and a cached hit still counts:
+
+```python
+@login_required_api
+@throttle(RATE_REVIEW, scope="review")
+def _create_review(request):
+    ...
+```
+
+Then the one question that decides whether the limit works at all: **what
+does an attacker change between attempts?**
+
+- `by=CALLER` (the default) counts per Firebase uid, falling back to the
+  address for an anonymous caller. Right for anything a *signed-in*
+  customer does, because the uid is fixed and unspoofable.
+- `by=ADDRESS` counts per client address. Right when the caller's
+  identity is itself the thing being attempted — sign-in and account
+  creation arrive with a fresh uid each time, so a per-caller window
+  there would never fill. This is what `accounts/middleware.py` uses, and
+  why it limits provisioning *before* creating the Django user.
+
+The cost of `ADDRESS` is that everybody behind one NAT shares a bucket,
+so use it only where it is needed and keep the limit well clear of real
+usage.
+
+Two invariants to preserve:
+
+- **A store failure allows the request.** `consume` swallows everything,
+  because a limiter that returns 429 when Redis blinks turns a cache
+  outage into a site outage. Keep that if you touch it.
+- **Never limit `/healthz/`** (`EXEMPT_PREFIXES`), or a burst of traffic
+  teaches Render that the service is down.
+
+Limits are expressed as constants in `throttle.py`, never as literals at
+the call site, and the test for a new limit asserts the behaviour — the
+nth request is refused and an unrelated caller is not — rather than the
+number.
 
 ---
 

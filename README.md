@@ -105,6 +105,10 @@ python -c "from django.core.management.utils import get_random_secret_key; print
 | `REDIS_URL` | Redis cache connection URL (`rediss://…`) | *(empty, no caching)* |
 | `CACHE_ENABLED` | Serve API reads from the cache | `true` |
 | `REDIS_TIMEOUT` | Seconds to wait for Redis before reading MySQL | `2` |
+| `THROTTLE_ENABLED` | Enforce the rate limits | `true` |
+| `THROTTLE_READ_RATE` | Reads allowed per caller per minute | `300` |
+| `THROTTLE_WRITE_RATE` | Writes allowed per caller per minute | `60` |
+| `TRUSTED_PROXY_COUNT` | Proxies in front of Django, for the client address | `0` |
 | `CSRF_TRUSTED_ORIGINS` | Trusted cross-origin origins | *(empty)* |
 | `HTTPS_ENABLED` | TLS terminated in front of Django | `false` |
 | `BACKUP_DIR` | Where backups are written | `backend/backups` |
@@ -247,6 +251,67 @@ Two consequences worth knowing:
 - A cache failure is a cache miss. Every operation is wrapped, so a Redis
   timeout or outage makes the API slower, never broken. `CACHE_ENABLED=false`
   turns caching off without removing the URL.
+
+## Rate limiting
+
+The API counts requests per caller in one-minute windows and answers
+`429` with a `Retry-After` header once a window is full.
+`backend/config/throttle.py` is the only module that does the counting,
+and it uses the same Redis as the cache so the limit is shared by every
+worker and every Render instance.
+
+| What is limited | Limit per minute | Counted per |
+|---|---|---|
+| Any read (`GET`, `HEAD`, `OPTIONS`) | 300 | caller |
+| Any write (`POST`, `PUT`, `PATCH`, `DELETE`) | 60 | caller |
+| `POST /api/auth/signin/` | 30 | **address** |
+| First sign-in of an unknown Firebase uid | 30 | **address** |
+| `POST /api/payments/…` | 10 | caller |
+| Creating or editing a review | 10 | caller |
+
+A **caller** is the Firebase uid when the request carries a valid token,
+and the client address otherwise, so one customer's burst cannot lock
+anybody else out — and a uid cannot be spoofed or changed by switching
+network. The two sign-in limits are the exception: they are counted per
+client address,
+because a flood of sign-in attempts arrives with a different Firebase uid
+every time and would never fill a per-caller window. Account creation is
+limited in the middleware rather than in the view, so a refused attempt
+does not leave a Django user behind.
+
+Over a limit the response is:
+
+```json
+{"error": "Too many requests. Try again in 23 seconds.", "code": "rate_limited"}
+```
+
+with `Retry-After`, `X-RateLimit-Limit` and `X-RateLimit-Remaining`. The
+frontend does not retry a `429` (`shouldRetry` in `src/api.ts`), so a
+limited request surfaces the message instead of multiplying the load.
+
+`/healthz/` and the static files are never counted, so a limit cannot
+make Render think the service is down.
+
+### Deploying behind a proxy
+
+A per-address limit is only as good as the address. Django sees the last
+proxy's address in `REMOTE_ADDR`, and the real client is somewhere in
+`X-Forwarded-For` — which a client can also write to.
+`TRUSTED_PROXY_COUNT` says how many entries at the right-hand end of that
+header this deployment added, so the address is taken from that position
+and anything the client appended is ignored.
+
+- `0` locally and for any direct connection (use `REMOTE_ADDR`).
+- `2` on Render for this project: the chain is browser → Vercel → Render.
+
+Too low and every anonymous caller shares one bucket — the proxy's
+address — so a handful of visitors could rate-limit the site. Too high
+and a client can spoof the header and never be limited.
+
+As with the cache, a failure is not an outage: if Redis is unreachable
+the counter cannot be read, and the request is allowed through.
+`THROTTLE_ENABLED=false` turns enforcement off; the test suite runs with
+it off and switches it on per test.
 
 ## Running it locally
 
