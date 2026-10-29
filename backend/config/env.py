@@ -25,7 +25,10 @@ DB_SSL_CA                   Path to the MySQL CA bundle (TLS)         *(empty)*
 DB_SSL_REQUIRED             Require TLS, skip certificate check       ``false``
 DB_CONN_MAX_AGE             Seconds a database connection is reused   ``0``
 SESSION_COOKIE_AGE          Session inactivity timeout (seconds)      ``900``
-CSRF_TRUSTED_ORIGINS        Comma-separated trusted CSRF origins      *(empty)*
+FIREBASE_PROJECT_ID         Firebase project that issues ID tokens    *(empty)*
+FIREBASE_TOKEN_LEEWAY       Clock-skew allowance when verifying (s)   ``30``
+FIREBASE_PUBLIC_KEYS_URL    Where Google publishes the signing certs  Google's URL
+CSRF_TRUSTED_ORIGINS        Comma-separated trusted CSRF origins      the Vercel site
 HTTPS_ENABLED               Terminate TLS in front of Django          ``false``
 BACKUP_DIR                  Where order/inventory backups are kept    ``<backend>/backups``
 BACKUP_RETENTION_DAYS       Days of backup artifacts to keep          ``14``
@@ -41,6 +44,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import os
+import tempfile
 
 # backend/ — the directory that contains manage.py, requirements.txt and
 # every Django app.
@@ -150,7 +154,37 @@ DB_CONN_MAX_AGE = env_int("DB_CONN_MAX_AGE", default=0)
 # DB_SSL_REQUIRED=true is the weaker fallback: the connection is encrypted but
 # the server certificate is not verified, which leaves it open to an active
 # man-in-the-middle. Prefer the CA bundle in production.
-DB_SSL_CA = env("DB_SSL_CA", default="")
+def ca_bundle_path(value):
+    """Return a filesystem path for a CA bundle.
+
+    ``value`` may be a path, or the certificate itself. A hosting
+    dashboard is a text box, so pasting the PEM straight into the variable
+    is the natural thing to do -- but libmysqlclient only accepts a
+    filename and fails obscurely with
+    ``(2026, 'TLS/SSL error: File name too long')`` when handed a
+    certificate, because it tries to open the whole blob as a path.
+    Accept both, and write inline PEM out to a file.
+
+    Some dashboards also flatten newlines into a literal backslash-n, which
+    makes the certificate unparseable; those are restored.
+    """
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if "-----BEGIN" not in value:
+        # An ordinary path, for example a Render Secret File.
+        return value
+
+    pem = value if "\n" in value else value.replace("\\n", "\n")
+    if not pem.endswith("\n"):
+        pem += "\n"
+
+    destination = Path(tempfile.gettempdir()) / "db-ssl-ca.pem"
+    destination.write_text(pem)
+    return str(destination)
+
+
+DB_SSL_CA = ca_bundle_path(env("DB_SSL_CA", default=""))
 DB_SSL_REQUIRED = env_bool("DB_SSL_REQUIRED", default=False)
 
 
@@ -179,12 +213,67 @@ DB_SSL_OPTIONS = db_ssl_options(DB_SSL_CA, DB_SSL_REQUIRED)
 SESSION_COOKIE_AGE = env_int("SESSION_COOKIE_AGE", default=900)
 
 
+# --- Firebase authentication --------------------------------------------------
+
+# The Firebase project whose ID tokens this API accepts. Every token is a
+# JWT signed by Google for exactly one project, and the project id is both
+# the token's audience and the tail of its issuer, so this value is what
+# stops a token minted for somebody else's Firebase project from being
+# accepted here. accounts/firebase.py refuses to verify anything while it
+# is empty, rather than falling back to an unchecked audience.
+#
+# It is the same value the browser bundle uses as VITE_FIREBASE_PROJECT_ID,
+# and it is not a secret: a project id is public. No service-account JSON is
+# needed, because tokens are verified against Google's *public* signing
+# certificates (see FIREBASE_PUBLIC_KEYS_URL).
+FIREBASE_PROJECT_ID = env("FIREBASE_PROJECT_ID", default="").strip()
+
+# Seconds of clock skew tolerated on a token's "exp", "iat" and "auth_time"
+# claims. Render's clock and Google's differ by milliseconds in practice, but
+# a container whose clock drifts a few seconds would otherwise reject every
+# freshly minted token. Keep it small: it is the window by which an expired
+# token is still accepted.
+FIREBASE_TOKEN_LEEWAY = env_int("FIREBASE_TOKEN_LEEWAY", default=30)
+
+# Where Google publishes the x509 certificates that sign Firebase ID tokens.
+# The keys rotate roughly daily; the response's Cache-Control header says how
+# long they may be cached, which accounts/firebase.py honours. Overridable so
+# a test can point it at a local fixture.
+FIREBASE_PUBLIC_KEYS_URL = env(
+    "FIREBASE_PUBLIC_KEYS_URL",
+    default=(
+        "https://www.googleapis.com/robot/v1/metadata/x509/"
+        "securetoken@system.gserviceaccount.com"
+    ),
+)
+
+
 # --- Deployment / HTTPS --------------------------------------------------------
 
 # Comma-separated list of origins that Django may trust for CSRF-protected
 # cross-origin requests, for example "https://bookstore.example.com". Only
 # needed when the React app is served from a different origin than the API.
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", [])
+#
+# This deployment always is: the browser loads the Vercel site and every
+# /api/* call is rewritten to this service on Vercel's side, so a POST arrives
+# with the *site's* Origin header while Host is the Render hostname. Django
+# compares the two and rejects the request with
+#
+#   Origin checking failed - https://<site> does not match any trusted origins
+#
+# until the site origin is listed here. The production site URLs are public,
+# not secrets, so they are defaults: a fresh deploy of this repo can register
+# and log users in without a dashboard round-trip. Setting the environment
+# variable still wins, which is what a custom domain needs.
+DEFAULT_CSRF_TRUSTED_ORIGINS = [
+    # Vercel's stable production alias for the `online-book-store` project.
+    "https://online-book-store-theta-seven.vercel.app",
+    # Per-team alias Vercel assigns to the same production deployment.
+    "https://online-book-store-puneethv333s-projects.vercel.app",
+]
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS", DEFAULT_CSRF_TRUSTED_ORIGINS
+)
 
 # Set to true when the deployment terminates TLS in front of Django (for
 # example behind a reverse proxy or load balancer). Enabling it turns on the

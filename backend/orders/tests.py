@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 from django.urls import reverse
 
+from accounts.tests_firebase import FirebaseTokenMixin
 from books.models import Book
 from cart.models import Cart
 from .models import Order, OrderItem
@@ -319,10 +320,11 @@ def card_data(**overrides):
     return data
 
 
-class OrderHistoryTests(TestCase):
+class OrderHistoryTests(FirebaseTokenMixin, TestCase):
     """Issue #10 / OBS-F-014: customers can view their order history."""
 
     def setUp(self):
+        super().setUp()
         self.book = Book.objects.create(**book_data())
         self.user = get_user_model().objects.create_user(
             username="historycustomer",
@@ -343,8 +345,11 @@ class OrderHistoryTests(TestCase):
         self.assertEqual(response.status_code, 201)
         return response.json()["order"]
 
-    def history(self, client=None):
-        response = (client or self.client).get(reverse("order_collection"))
+    def history(self, client=None, token=None):
+        response = (client or self.client).get(
+            reverse("order_collection"),
+            **({"HTTP_AUTHORIZATION": f"Bearer {token}"} if token else {}),
+        )
         self.assertEqual(response.status_code, 200)
         return response.json()
 
@@ -401,25 +406,22 @@ class OrderHistoryTests(TestCase):
         self.assertEqual(body["count"], 1)
         self.assertEqual(body["orders"][0]["id"], placed["id"])
 
-    def test_guest_order_is_claimed_when_the_customer_logs_in(self):
-        # Logging in cycles the session key, so the login endpoint hands
+    def test_guest_order_is_claimed_when_the_customer_signs_in(self):
+        # Signing in cycles the session key, so the sign-in endpoint hands
         # the guest order over to the account it belongs to.
         self.add_to_cart(self.book, quantity=1)
         placed = self.place_order()
 
+        token = self.make_token(uid="uid-history", email=self.user.email)
         response = self.client.post(
-            reverse("api_login"),
-            data=json.dumps(
-                {
-                    "username": "historycustomer",
-                    "password": "HistoryPass123",
-                }
-            ),
+            reverse("api_signin"),
+            data=json.dumps({}),
             content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
         )
         self.assertEqual(response.status_code, 200)
 
-        body = self.history()
+        body = self.history(token=token)
 
         self.assertEqual([o["id"] for o in body["orders"]], [placed["id"]])
         self.assertEqual(

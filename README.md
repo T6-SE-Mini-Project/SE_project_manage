@@ -10,16 +10,28 @@ customer accounts and generate sales reports.
   JSON API.
 - **Frontend:** React 18 with TypeScript and Vite, with TanStack Query as
   the data layer.
+- **Authentication:** Firebase Authentication (email/password and Google),
+  verified on the backend as a JWT bearer token.
 - **Deployment:** Docker Compose locally; in production the backend runs on
   Render (Docker) and the frontend on Vercel, against managed MySQL on Aiven.
   See [Docs/Deployment.md](Docs/Deployment.md).
+
+## Live demo
+
+- **Frontend:** <https://online-book-store-theta-seven.vercel.app>
+- **Backend API:** <https://bookstore-api-7g5z.onrender.com>
+
+The site is hosted on Vercel's free plan and proxies `/api/*` to the Render
+backend, so the catalogue may take a few seconds to load if the backend has
+been idle.
 
 ## Repository layout
 
 ```
 backend/            Django project (all backend code lives here)
   config/           Settings, central env configuration, URL routing, HTTP helpers
-  accounts/         Registration and login (template pages + JSON API)
+  accounts/         Firebase authentication: token verification, the uid to
+                    user link, the JWT middleware and the session API
   books/            Book catalogue, search and filtering
   cart/             Session shopping cart
   orders/           Order placement, availability checks, history, cancellation
@@ -84,13 +96,84 @@ python -c "from django.core.management.utils import get_random_secret_key; print
 | `DB_SSL_CA` | CA bundle path for a verified TLS database connection | *(empty)* |
 | `DB_SSL_REQUIRED` | Require TLS without verifying the certificate | `false` |
 | `DB_CONN_MAX_AGE` | Seconds a database connection is reused | `0` |
-| `SESSION_COOKIE_AGE` | Session inactivity timeout (seconds) | `900` |
+| `SESSION_COOKIE_AGE` | Guest cart session timeout (seconds) | `900` |
+| `FIREBASE_PROJECT_ID` | Firebase project whose ID tokens are accepted | *(empty)* |
+| `FIREBASE_TOKEN_LEEWAY` | Clock skew allowed when verifying a token (s) | `30` |
 | `CSRF_TRUSTED_ORIGINS` | Trusted cross-origin origins | *(empty)* |
 | `HTTPS_ENABLED` | TLS terminated in front of Django | `false` |
 | `BACKUP_DIR` | Where backups are written | `backend/backups` |
 | `BACKUP_RETENTION_DAYS` | Days of backup artifacts to keep | `14` |
 | `BACKUP_MAX_AGE_HOURS` | Maximum accepted backup age | `24` |
 | `VITE_API_BASE_URL` | Frontend's API base URL | `/api` |
+| `VITE_FIREBASE_API_KEY` | Firebase web API key | *required to sign in* |
+| `VITE_FIREBASE_AUTH_DOMAIN` | Firebase auth domain | *required to sign in* |
+| `VITE_FIREBASE_PROJECT_ID` | Firebase project id (same as the backend's) | *required to sign in* |
+| `VITE_FIREBASE_STORAGE_BUCKET` | From the Firebase web config | *(empty)* |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | From the Firebase web config | *(empty)* |
+| `VITE_FIREBASE_APP_ID` | From the Firebase web config | *(empty)* |
+
+## Authentication
+
+Customers sign in with **Firebase Authentication**, using either an email
+address and password or their Google account. Firebase owns credentials:
+no password ever reaches this project's backend, and no password is
+stored in its database.
+
+What the backend stores is the link. Each Firebase `uid` is recorded
+against exactly one Django user (`accounts.FirebaseIdentity`), and
+everything else — orders, carts, reviews, `is_staff` — hangs off that
+user as before. The uid, not the email address, is the identity, so
+changing an email in Firebase moves the address rather than creating a
+second account.
+
+The request path:
+
+```
+Browser  ── Firebase SDK sign-in ──>  Firebase
+         <── ID token (RS256 JWT) ──
+         ── Authorization: Bearer <token> ──>  Django
+                                               accounts/middleware.py
+                                               verifies the JWT, resolves
+                                               the uid to request.user
+```
+
+`accounts/firebase.py` verifies every token against Google's **public**
+signing certificates, so **no service-account JSON is needed** — only
+`FIREBASE_PROJECT_ID`, which pins the token's audience and is what
+rejects a token minted for a different Firebase project. The session
+cookie still exists, but only as the key for a *guest* cart and guest
+orders; it no longer authenticates anybody on the API.
+
+### One-time Firebase setup
+
+1. Create a project in the [Firebase console](https://console.firebase.google.com/).
+2. Under **Authentication → Sign-in method**, enable **Email/Password**
+   and **Google**.
+3. Under **Authentication → Settings → Authorized domains**, add the
+   domains the app is served from (`localhost` is there by default; add
+   the Vercel domain for production).
+4. Under **Project settings → General → Your apps**, add a Web app and
+   copy its config into `frontend/.env` as the `VITE_FIREBASE_*`
+   variables.
+5. Put the same project id in `backend/.env` as `FIREBASE_PROJECT_ID`.
+
+### Administrators
+
+Firebase creates every account as an ordinary customer, and nothing in
+the browser can grant itself administrator access. Sign in through the
+app once, then promote the account from the command line:
+
+```bash
+cd backend
+python manage.py grant_admin you@example.com      # --revoke to undo
+```
+
+An administrator is any account with `is_staff` set, exactly as before,
+and existing accounts can still be promoted in the Django admin at
+`/admin/`. An account that predates Firebase keeps its orders and its
+`is_staff` flag when its owner first signs in through Firebase, provided
+Firebase reports that email address as **verified** — which Google
+sign-in does, and an unverified email/password sign-up does not.
 
 ## Running it locally
 
@@ -110,13 +193,14 @@ pip install -r backend/requirements.txt
 cd backend
 python manage.py migrate
 python manage.py seed_books            # sample catalogue
-python manage.py createsuperuser       # an administrator account
+python manage.py createsuperuser       # for the Django admin at /admin/
 python manage.py runserver             # http://127.0.0.1:8000
 ```
 
-An administrator is any account with `is_staff` set — `createsuperuser`
-makes one, and existing accounts can be promoted in the Django admin at
-`/admin/`.
+`createsuperuser` creates a password account for Django's own admin site.
+Customers (and administrators of the React app) sign in through Firebase
+instead — see [Authentication](#authentication) above, and use
+`manage.py grant_admin` to promote one.
 
 ### 3. Frontend
 
@@ -142,13 +226,14 @@ API on port 8000.
 
 ## API overview
 
-All endpoints return JSON. Writes need the CSRF token from
-`GET /api/csrf/`, which the frontend client handles automatically.
-Authentication is Django's session cookie.
+All endpoints return JSON. Authentication is a Firebase ID token sent as
+`Authorization: Bearer <token>`, which `frontend/src/api.ts` attaches to
+every request. Writes also need the CSRF token from `GET /api/csrf/`,
+which the same client handles automatically.
 
 | Area | Endpoints |
 |---|---|
-| Accounts | `GET/POST /api/auth/session\|login\|logout\|register/` |
+| Accounts | `GET /api/auth/session/`, `POST /api/auth/signin\|logout/` |
 | Books | `GET /api/books/`, `/api/books/categories/`, `/api/books/<id>/` |
 | Cart | `GET /api/cart/`, `POST /api/cart/items/`, `PATCH\|DELETE /api/cart/items/<id>/` |
 | Orders | `GET\|POST /api/orders/`, `GET /api/orders/availability/`, `GET /api/orders/<id>/`, `POST /api/orders/<id>/cancel/` |
@@ -160,7 +245,9 @@ Authentication is Django's session cookie.
 | Admin reports | `GET /api/admin/reports/sales/`, `GET /api/admin/backups/` |
 
 Everything under `/api/admin/` requires `is_staff`: anonymous callers get
-401 and signed-in customers get 403.
+401 and signed-in customers get 403. A token that is present but unusable
+— expired, forged, or issued for another Firebase project — gets 401 from
+the middleware on any endpoint, and a deactivated account gets 403.
 
 ### Payment test cards
 
@@ -214,8 +301,10 @@ frontend type-check, tests and build.
 ### End-to-end smoke test
 
 `scripts/smoke_test.py` drives a running server over HTTP through the
-whole customer and administrator flow. It writes data, so point it at a
-throwaway database — the module docstring has the exact commands.
+whole customer and administrator flow, signing both accounts in through
+Firebase's REST API exactly as the browser does. It therefore needs a
+real Firebase project and its web API key. It writes data, so point it at
+a throwaway database — the module docstring has the exact commands.
 
 ### Load testing
 
@@ -256,6 +345,9 @@ screen.
 Production runs the backend on **Render** and the frontend on **Vercel**,
 against the existing managed **Aiven MySQL** instance.
 
+- Frontend: <https://online-book-store-theta-seven.vercel.app>
+- Backend API: <https://bookstore-api-7g5z.onrender.com>
+
 | Piece | Config file | Committed |
 |---|---|---|
 | Render service (Docker, env vars, health check) | `render.yaml` | yes |
@@ -264,13 +356,23 @@ against the existing managed **Aiven MySQL** instance.
 | Production frontend values | `frontend/.env.production` | yes, no secrets |
 
 Vercel rewrites `/api/*` to the Render service **server-side**, so the browser
-only ever sees one origin. That is deliberate: authentication is a Django
-session cookie and `frontend/src/api.ts` sends `credentials: "same-origin"`, so
-a cross-origin API would make the session cookie third-party — blocked by
-Safari and Firefox. `VITE_API_BASE_URL` therefore stays `/api` in production.
+only ever sees one origin. That is deliberate: the API's session cookie keys the
+guest cart and guest orders, and `frontend/src/api.ts` sends
+`credentials: "same-origin"`, so a cross-origin API would make that cookie
+third-party — blocked by Safari and Firefox, and anything added to the cart
+before signing in would be lost. (Sign-in itself would survive, since that
+travels as a bearer token.) `VITE_API_BASE_URL` therefore stays `/api` in
+production.
 
-Two values must be set by hand after the first deploy:
+Values that must be set by hand after the first deploy:
 
+- the backend's `FIREBASE_PROJECT_ID` on Render, and the matching
+  `VITE_FIREBASE_*` variables in the Vercel project (Vercel injects them
+  into the build, overriding the empty defaults in
+  `frontend/.env.production`);
+- the Vercel domain in the Firebase console, under **Authentication →
+  Settings → Authorized domains** — Firebase refuses to sign anybody in
+  from a domain not listed there;
 - the backend's `CSRF_TRUSTED_ORIGINS` → the Vercel origin (the browser's
   origin is what Django's CSRF check sees, not the Render hostname);
 - the Aiven credentials, which Render prompts for as it reads `render.yaml`.

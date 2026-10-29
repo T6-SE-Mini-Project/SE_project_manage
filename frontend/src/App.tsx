@@ -23,7 +23,10 @@ export default function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route index element={<Navigate to="/register" replace />} />
+        {/* The catalogue is the home page. RequireAuth sends anyone who
+            is not signed in to /login, remembering where they meant to
+            go. */}
+        <Route index element={<Navigate to="/books" replace />} />
 
         <Route path="register" element={<RegisterPage />} />
         <Route path="login" element={<LoginPage />} />

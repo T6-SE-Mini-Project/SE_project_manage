@@ -52,6 +52,11 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Identifies API callers from their Firebase ID token, after Django's
+    # own middleware has resolved any session user. A bearer token wins
+    # over the session; without one the session still signs in the Django
+    # admin site. See accounts/middleware.py.
+    "accounts.middleware.FirebaseAuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

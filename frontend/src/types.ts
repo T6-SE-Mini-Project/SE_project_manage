@@ -171,6 +171,12 @@ export interface User {
   email: string;
   is_staff: boolean;
   date_joined: string;
+  /** The Firebase uid this account is linked to. */
+  uid: string;
+  /** How they last signed in: "password" or "google.com". */
+  provider: string;
+  /** The name held on the Firebase account, when there is one. */
+  display_name: string;
 }
 
 export interface SessionResponse {
@@ -178,16 +184,15 @@ export interface SessionResponse {
   user: User | null;
 }
 
-export interface LoginInput {
-  username: string;
+/** Credentials for Firebase's email/password provider. */
+export interface EmailCredentials {
+  email: string;
   password: string;
 }
 
-export interface RegisterInput {
-  username: string;
-  email: string;
-  password1: string;
-  password2: string;
+/** A new account: Firebase credentials plus the name to show. */
+export interface EmailRegistration extends EmailCredentials {
+  displayName: string;
 }
 
 /** Field-level errors returned by the form-backed endpoints. */

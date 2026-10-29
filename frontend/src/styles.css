@@ -950,6 +950,62 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.auth-form .field-hint {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+/* The "or" rule between the email form and the identity providers. */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  content: "";
+}
+
+/* Google asks that their button keep their own neutral styling rather
+   than the site's accent colour, so it does not use .primary. */
+.button.google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.button.google:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.google-mark {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+}
+
+.site-account .account-name {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- Order history ------------------------------------------------------ */
 
 .order-list {

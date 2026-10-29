@@ -18,7 +18,8 @@ Browser
   │    api.ts  ── one typed fetch wrapper, CSRF + errors
   │    config.ts ─ reads VITE_* environment variables
   │
-  │  HTTP, JSON, session cookie
+  │  HTTP, JSON, Firebase ID token (Bearer) + session cookie for the
+  │  guest cart
   ▼
 Django (backend/)
   urls.py      ── routes /api/<area>/ to an app
@@ -187,6 +188,44 @@ Plain functions returning dicts. Two things to respect:
 Never expose a secret or a credential. Payments store only the last four
 digits of a card; the full number is never persisted.
 
+### Authentication
+
+Identity comes from **Firebase**, not from a password this project holds.
+The browser signs in with the Firebase SDK (`frontend/src/firebase.ts`)
+and sends the ID token — an RS256 JWT — as `Authorization: Bearer <token>`
+on every request. `accounts/middleware.py` verifies it, resolves the
+Firebase uid to a Django user through `accounts.FirebaseIdentity`, and
+assigns `request.user`. Everything downstream is unchanged: views,
+decorators and query scoping only ever read `request.user`.
+
+Three rules follow from that:
+
+- **Never trust a uid, email or name from the request body.** They come
+  from the verified token's claims or they do not count. The only module
+  that reads a token is `accounts/firebase.py`; the only module that turns
+  claims into a user is `accounts/services.py`.
+- **Firebase cannot grant privileges.** `is_staff` lives on the Django
+  user and is set from the command line (`manage.py grant_admin`) or the
+  Django admin, never from anything the browser sends.
+- **The session cookie is not authentication any more.** It keys the
+  *guest* cart and guest orders, and `accounts/api_views.py` hands those
+  over to the account on sign-in. Anything else keyed by session must be
+  handed over there too — and must not follow one browser from one
+  customer to the next (`SESSION_UID_KEY` is what prevents that).
+
+Tests mint real tokens with `accounts.tests_firebase.FirebaseTokenMixin`,
+which signs them with a throwaway key and points the verifier's
+certificate fetch at it, so no test has to mock verification away:
+
+```python
+class MyApiTests(FirebaseTokenMixin, TestCase):
+    def test_something(self):
+        response = self.client.get(
+            reverse("order_collection"),
+            HTTP_AUTHORIZATION=f"Bearer {self.make_token(uid='uid-1')}",
+        )
+```
+
 ### Authorization
 
 Use the decorators from `config/http.py`, and apply them to the view, not
@@ -204,11 +243,11 @@ Scope every customer-facing query to the caller. `orders/views.py`
 orders on their account plus their own guest orders from this session,
 and nothing else. Never trust an id from the request to imply ownership.
 
-A subtlety worth knowing: `django.contrib.auth.login()` cycles the
-session key, and the cart and guest orders are keyed by it. The login and
-registration endpoints therefore call `reassign_cart_session` and
-`claim_session_orders`. If you add anything else keyed by session, hand it
-over there too.
+A subtlety worth knowing: `POST /api/auth/signin/` cycles the session key
+(for the same reason `django.contrib.auth.login()` does), and the cart and
+guest orders are keyed by it. That endpoint therefore calls
+`reassign_cart_session` and `claim_session_orders`. If you add anything
+else keyed by session, hand it over there too.
 
 ---
 
@@ -216,10 +255,26 @@ over there too.
 
 ### `api.ts` — one way to call the server
 
-It adds `Accept`/`Content-Type`, fetches and caches the CSRF token for
-writes, and converts any non-2xx response into a typed `ApiError`
-carrying `status` and the parsed `body`. Add a thin function per
-endpoint; never call `fetch` from a component.
+It adds `Accept`/`Content-Type`, attaches the Firebase ID token as
+`Authorization: Bearer …`, fetches and caches the CSRF token for writes,
+and converts any non-2xx response into a typed `ApiError` carrying
+`status` and the parsed `body`. Add a thin function per endpoint; never
+call `fetch` from a component.
+
+### `firebase.ts` and `hooks/useAuth.tsx` — who is signed in
+
+`firebase.ts` is the only module that talks to the Firebase SDK. It
+initializes lazily (an unconfigured `.env` must not blank the page) and
+converts Firebase's error codes into messages a customer can act on.
+
+`hooks/useAuth.tsx` has two layers, and the split matters:
+`FirebaseAuthProvider` subscribes to the SDK once and holds the
+**authId** — the Firebase uid — keeping it current through sign-in,
+sign-out and hourly token refreshes; `useSession()` then asks the API who
+that token resolves to. The account and `is_staff` are the server's
+answer, never the browser's. `RequireAuth` waits for both before
+deciding, which is what stops a signed-in customer being bounced to the
+login page on every page load.
 
 ### `hooks/` — the data layer
 

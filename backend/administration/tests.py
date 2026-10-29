@@ -14,6 +14,8 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.models import FirebaseIdentity
+from accounts.tests_firebase import FirebaseTokenMixin
 from books.models import Book
 from orders.models import Order, OrderItem
 from payments.models import Payment
@@ -601,7 +603,7 @@ class AdminOrderManagementTests(AdminTestCase):
         )
 
 
-class AdminCustomerManagementTests(AdminTestCase):
+class AdminCustomerManagementTests(FirebaseTokenMixin, AdminTestCase):
     """Issue #24: administrator customer management."""
 
     def setUp(self):
@@ -626,6 +628,10 @@ class AdminCustomerManagementTests(AdminTestCase):
             status=Order.STATUS_PENDING,
             total_amount=Decimal("99.00"),
         )
+
+    def token_for(self, uid):
+        """A signed ID token for a Firebase identity in this test."""
+        return self.make_token(uid=uid, email=self.customer.email)
 
     def customers(self, params=None):
         response = self.admin_client.get(
@@ -719,16 +725,23 @@ class AdminCustomerManagementTests(AdminTestCase):
         self.customer.refresh_from_db()
         self.assertFalse(self.customer.is_active)
 
-        # A deactivated customer can no longer sign in, while their order
-        # history is preserved.
-        login = Client().post(
-            reverse("api_login"),
-            data=json.dumps(
-                {"username": "shopper", "password": "ShopperPass123"}
-            ),
-            content_type="application/json",
+        # A deactivated customer can no longer use the API, while their
+        # order history is preserved. Firebase keeps issuing them tokens —
+        # deactivation is a decision only this project knows about — so
+        # the refusal is the authentication middleware's job, and 403 says
+        # that signing in again will not help.
+        FirebaseIdentity.objects.create(
+            user=self.customer,
+            uid="uid-deactivated",
+            email=self.customer.email,
+            email_verified=True,
         )
-        self.assertEqual(login.status_code, 401)
+        refused = Client().get(
+            reverse("api_session_detail"),
+            HTTP_AUTHORIZATION=f"Bearer {self.token_for('uid-deactivated')}",
+        )
+        self.assertEqual(refused.status_code, 403)
+        self.assertEqual(refused.json()["code"], "account_disabled")
         self.assertEqual(
             Order.objects.filter(user=self.customer).count(), 3
         )

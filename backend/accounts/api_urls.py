@@ -6,7 +6,6 @@ from . import api_views
 
 urlpatterns = [
     path("session/", api_views.session_detail, name="api_session_detail"),
-    path("login/", api_views.session_create, name="api_login"),
+    path("signin/", api_views.session_create, name="api_signin"),
     path("logout/", api_views.session_delete, name="api_logout"),
-    path("register/", api_views.account_create, name="api_register"),
 ]

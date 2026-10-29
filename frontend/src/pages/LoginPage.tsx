@@ -2,41 +2,63 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { useLogin, useSession } from "../hooks/useAuth";
-import { errorMessage, fieldError, fieldErrors } from "../errors";
+import GoogleButton from "../components/GoogleButton";
+import {
+  useEmailSignIn,
+  useGoogleSignIn,
+  usePasswordReset,
+  useSession,
+} from "../hooks/useAuth";
+import { errorMessage } from "../errors";
 
 interface LoginLocationState {
+  /** The protected page that sent the customer here, if any. */
   from?: string;
-  registered?: boolean;
 }
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAuthenticated } = useSession();
-  const loginMutation = useLogin();
+  const { isAuthenticated, isConfigured } = useSession();
 
-  const [username, setUsername] = useState("");
+  const emailSignIn = useEmailSignIn();
+  const googleSignIn = useGoogleSignIn();
+  const passwordReset = usePasswordReset();
+
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // Return to the page the login check interrupted, or the catalogue.
   const locationState = location.state as LoginLocationState | null;
+  const from = locationState?.from ?? "/books";
 
-  // After registration, go to the Books page.
-  // Otherwise, preserve the original protected-page redirect.
-  const from = locationState?.registered
-    ? "/books"
-    : locationState?.from ?? "/books";
+  const pending = emailSignIn.isPending || googleSignIn.isPending;
+  // Both sign-in paths end in the same place, so one message slot shows
+  // whichever of them failed.
+  const failure = emailSignIn.error ?? googleSignIn.error;
 
-  const errors = fieldErrors(loginMutation.error);
-
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  async function signIn(start: () => Promise<unknown>) {
     try {
-      await loginMutation.mutateAsync({ username, password });
+      await start();
       navigate(from, { replace: true });
     } catch {
       // The error message is displayed below.
+    }
+  }
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void signIn(() => emailSignIn.mutateAsync({ email, password }));
+  }
+
+  function handleGoogle() {
+    void signIn(() => googleSignIn.mutateAsync(undefined));
+  }
+
+  function handlePasswordReset() {
+    passwordReset.reset();
+    if (email.trim()) {
+      passwordReset.mutate(email);
     }
   }
 
@@ -64,33 +86,45 @@ export default function LoginPage() {
         </div>
       </header>
 
-      {locationState?.registered ? (
-        <div className="alert" role="status">
-          Account created successfully. Please log in.
+      {!isConfigured ? (
+        <div className="alert error" role="alert">
+          Sign-in is not configured for this deployment. Add the
+          <code> VITE_FIREBASE_*</code> variables to
+          <code> frontend/.env</code> and reload.
         </div>
       ) : null}
 
-      {loginMutation.isError ? (
+      {failure ? (
         <div className="alert error" role="alert">
-          {errorMessage(loginMutation.error, "Could not log you in.")}
+          {errorMessage(failure, "Could not log you in.")}
+        </div>
+      ) : null}
+
+      {passwordReset.isSuccess ? (
+        <div className="alert" role="status">
+          If an account exists for {email}, a password reset link is on its
+          way.
+        </div>
+      ) : null}
+
+      {passwordReset.isError ? (
+        <div className="alert error" role="alert">
+          {errorMessage(passwordReset.error, "Could not send a reset email.")}
         </div>
       ) : null}
 
       <form className="auth-form" onSubmit={handleSubmit}>
         <div className="field">
-          <label htmlFor="username">Username</label>
+          <label htmlFor="email">Email address</label>
           <input
-            id="username"
-            name="username"
-            type="text"
-            autoComplete="username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
             required
           />
-          {fieldError(errors, "username") ? (
-            <p className="field-error">{fieldError(errors, "username")}</p>
-          ) : null}
         </div>
 
         <div className="field">
@@ -104,18 +138,36 @@ export default function LoginPage() {
             onChange={(event) => setPassword(event.target.value)}
             required
           />
-          {fieldError(errors, "password") ? (
-            <p className="field-error">{fieldError(errors, "password")}</p>
-          ) : null}
         </div>
 
         <button
           type="submit"
           className="button primary"
-          disabled={loginMutation.isPending}
+          disabled={pending || !isConfigured}
         >
-          {loginMutation.isPending ? "Logging in..." : "Log in"}
+          {emailSignIn.isPending ? "Logging in..." : "Log in"}
         </button>
+
+        <button
+          type="button"
+          className="button-link"
+          onClick={handlePasswordReset}
+          disabled={!email.trim() || passwordReset.isPending || !isConfigured}
+        >
+          {passwordReset.isPending
+            ? "Sending reset email..."
+            : "Forgot your password?"}
+        </button>
+
+        <p className="auth-divider">
+          <span>or</span>
+        </p>
+
+        <GoogleButton
+          onClick={handleGoogle}
+          pending={googleSignIn.isPending}
+          disabled={pending || !isConfigured}
+        />
       </form>
 
       <p className="muted">

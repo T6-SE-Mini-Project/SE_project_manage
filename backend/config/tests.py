@@ -174,6 +174,19 @@ print(json.dumps({
             ["https://bookstore.vercel.app"],
         )
 
+    def test_deployed_frontend_origin_is_trusted_by_default(self):
+        # A fresh deploy has no CSRF_TRUSTED_ORIGINS in the dashboard (the
+        # blueprint leaves it unset), and without a trusted origin every
+        # POST -- register, login, checkout -- fails with 403. The deployed
+        # site origins are public, so they are defaults rather than another
+        # value someone has to remember to paste in.
+        settings = self.load_settings(CSRF_TRUSTED_ORIGINS="")
+
+        self.assertIn(
+            "https://online-book-store-theta-seven.vercel.app",
+            settings["csrf_trusted_origins"],
+        )
+
     def test_platform_hostname_is_added_to_allowed_hosts(self):
         settings = self.load_settings(
             DJANGO_ALLOWED_HOSTS="bookstore.example.com",

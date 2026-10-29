@@ -55,6 +55,16 @@ services:
       - key: CSRF_TRUSTED_ORIGINS
         sync: false
 
+      # --- Firebase Authentication ------------------------------------------
+      # The Firebase project whose ID tokens this API accepts; it must match
+      # the Vercel build's VITE_FIREBASE_PROJECT_ID. Without it every sign-in
+      # is refused. Not a secret, but it belongs to whoever deploys, so
+      # Render prompts for it rather than carrying a value here. No
+      # service-account file is needed: tokens are verified against Google's
+      # public certificates.
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+
       # --- Managed MySQL (Aiven) -------------------------------------------
       - key: DB_NAME
         sync: false
