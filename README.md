@@ -419,8 +419,12 @@ and cannot be skipped or reversed.
 cd backend
 python manage.py test --settings=config.settings_test
 
-# Backend, against the configured MySQL database (as CI runs it)
-python manage.py test
+# Backend, against the configured MySQL database (as CI runs it).
+# Caching and rate limiting are off for the suite: it runs in one process
+# from one address, so a shared counter or cached entry would let one test
+# change the next one's answer. Both are tested by turning them on
+# explicitly, which config.settings_test also does.
+THROTTLE_ENABLED=false CACHE_ENABLED=false python manage.py test
 
 # Frontend
 cd frontend

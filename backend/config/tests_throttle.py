@@ -433,8 +433,14 @@ class ThrottleResilienceTests(ThrottleTestCase):
         self.assertTrue(allowed)
 
 
+@override_settings(THROTTLE_ENABLED=False)
 class ThrottleDisabledTests(TestCase):
-    """Nothing is counted while THROTTLE_ENABLED is off."""
+    """Nothing is counted while THROTTLE_ENABLED is off.
+
+    Stated here rather than inherited from the settings module, so the
+    test means the same thing however the suite is run — CI runs it
+    against MySQL with ``config.settings``.
+    """
 
     def test_no_limit_headers_are_added(self):
         response = self.client.get(reverse("book_list"))

@@ -443,6 +443,7 @@ class CacheResilienceTests(TestCase):
         self.assertEqual(response.json()["books"][0]["title"], "Renamed")
 
 
+@override_settings(CACHE_ENABLED=False)
 class CacheDisabledTests(TestCase):
     """With no Redis configured, nothing is cached at all."""
 
@@ -450,8 +451,7 @@ class CacheDisabledTests(TestCase):
         self.book = Book.objects.create(**book_data())
 
     def test_reads_are_not_cached(self):
-        # config.settings_test leaves CACHE_ENABLED off, as a deployment
-        # without REDIS_URL does.
+        # CACHE_ENABLED off is what a deployment without REDIS_URL gets.
         response = self.client.get(reverse("book_list"))
 
         self.assertEqual(response.status_code, 200)
