@@ -82,6 +82,13 @@ jobs:
           DB_PORT: "3306"
           DJANGO_SECRET_KEY: ci-only-secret-key
           DJANGO_DEBUG: "true"
+          # The whole suite runs in one process from one address, so a
+          # shared rate-limit counter or response cache would make one
+          # test's requests change the next one's answer. Both features
+          # are tested by turning them on explicitly, in
+          # config/tests_throttle.py and config/tests_cache.py.
+          THROTTLE_ENABLED: "false"
+          CACHE_ENABLED: "false"
         run: python manage.py test
 
   frontend:

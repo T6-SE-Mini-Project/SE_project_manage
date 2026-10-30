@@ -4,6 +4,14 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 
+from config.cache import (
+    BOOKS,
+    TTL_BOOK_DETAIL,
+    TTL_BOOK_LIST,
+    TTL_CATEGORIES,
+    cached_json,
+)
+
 from .models import Book
 from .serializers import serialize_book_detail, serialize_book_summary
 
@@ -40,6 +48,7 @@ def _parse_available(raw):
 
 
 @require_GET
+@cached_json(TTL_BOOK_LIST, namespaces=[BOOKS])
 def book_list(request):
     books = Book.objects.all()
 
@@ -100,6 +109,7 @@ def book_list(request):
 
 
 @require_GET
+@cached_json(TTL_CATEGORIES, namespaces=[BOOKS])
 def book_categories(request):
     categories = list(
         Book.objects.order_by("category")
@@ -111,6 +121,7 @@ def book_categories(request):
 
 
 @require_GET
+@cached_json(TTL_BOOK_DETAIL, namespaces=[BOOKS])
 def book_detail(request, pk):
     try:
         book = Book.objects.get(pk=pk)

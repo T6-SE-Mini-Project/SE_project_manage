@@ -55,6 +55,45 @@ services:
       - key: CSRF_TRUSTED_ORIGINS
         sync: false
 
+      # --- Firebase Authentication ------------------------------------------
+      # The Firebase project whose ID tokens this API accepts; it must match
+      # the Vercel build's VITE_FIREBASE_PROJECT_ID. Without it every sign-in
+      # is refused. Not a secret, but it belongs to whoever deploys, so
+      # Render prompts for it rather than carrying a value here. No
+      # service-account file is needed: tokens are verified against Google's
+      # public certificates.
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+
+      # --- Redis cache (Upstash) ---------------------------------------------
+      # Upstash's TCP endpoint, TLS-only, password included -- so it is a
+      # secret and Render prompts for it. Empty disables caching and the API
+      # reads from MySQL, which is a safe but slower deployment.
+      #   rediss://default:<password>@<endpoint>.upstash.io:6379
+      - key: REDIS_URL
+        sync: false
+
+      # Kill switch, so caching can be turned off from the dashboard
+      # without clearing the URL above.
+      - key: CACHE_ENABLED
+        value: "true"
+
+      # --- Rate limiting ------------------------------------------------------
+      - key: THROTTLE_ENABLED
+        value: "true"
+      - key: THROTTLE_READ_RATE
+        value: "300"
+      - key: THROTTLE_WRITE_RATE
+        value: "60"
+
+      # Two proxies sit in front of this service: Vercel's edge rewrites
+      # /api/* to it, and Render's own proxy terminates TLS. So the
+      # customer's address is the second entry from the right of
+      # X-Forwarded-For. At 0 every anonymous caller would share one rate
+      # limit bucket, because REMOTE_ADDR is Vercel, not the customer.
+      - key: TRUSTED_PROXY_COUNT
+        value: "2"
+
       # --- Managed MySQL (Aiven) -------------------------------------------
       - key: DB_NAME
         sync: false

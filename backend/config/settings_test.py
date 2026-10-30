@@ -26,6 +26,29 @@ DATABASES = {
     }
 }
 
+# No response caching in the suite. Every test would otherwise share one
+# process-local cache, and a test that changes a row through the ORM and
+# then reads it back through the API would be served the previous answer.
+# The caching behaviour itself is tested in config/tests_cache.py, which
+# turns a local-memory cache on explicitly.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.dummy.DummyCache",
+    },
+    "throttle": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "obs-throttle-tests",
+    },
+}
+
+CACHE_ENABLED = False
+
+# No rate limiting in the suite either: tests share a process, so one
+# test's requests would count against the next one's and the failure would
+# depend on the order they ran in. config/tests_throttle.py turns it on
+# explicitly and clears the counters around each test.
+THROTTLE_ENABLED = False
+
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.MD5PasswordHasher",
 ]

@@ -1,27 +1,42 @@
 """JSON authentication endpoints for the React frontend.
 
-The template-based registration and login pages in ``accounts/views.py``
-stay as they are; these endpoints expose the same behaviour over JSON so
-the React app can establish a Django session. They are needed by every
-feature that must know who the customer is: order history (issue #10),
-book reviews (issue #11) and the administrator screens (issues #12 and
-#24).
+Identity comes from Firebase. The browser signs in with the Firebase SDK
+(email/password or Google), and
+``accounts.middleware.FirebaseAuthenticationMiddleware`` verifies the ID
+token on every request, so there is no password to post here and no
+Django session to establish:
 
-Authentication uses Django's session cookie plus the CSRF token issued
-by ``/api/csrf/``; no token scheme is introduced.
+===========================  =================================================
+``GET  /api/auth/session/``  The login check. Reports who the token
+                             identifies, or ``{authenticated: false}``.
+``POST /api/auth/signin/``   Called once, right after a Firebase sign-in:
+                             links the Firebase uid to a Django user and
+                             hands the guest cart and guest orders over.
+``POST /api/auth/logout/``   Forgets the browser session. The Firebase
+                             sign-out itself happens in the browser.
+===========================  =================================================
+
+The session cookie survives this change, but only as the key for a
+*guest* cart and guest orders (``cart.models.Cart.session_key``,
+``orders.models.Order.session_key``). It no longer authenticates anyone.
 """
 
-from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.forms import AuthenticationForm
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 
 from cart.services import reassign_cart_session
-from config.http import json_error, read_json
+from config.http import json_error
+from config.throttle import ADDRESS, RATE_SIGNIN, throttle
 from orders.services import claim_session_orders
 
-from .forms import CustomerRegistrationForm
-from .serializers import first_form_error, serialize_form_errors, serialize_user
+from .middleware import SESSION_UID_KEY
+from .serializers import serialize_user
+from .services import record_sign_in
+
+
+def _identity(request):
+    """The Firebase identity the middleware resolved, or ``None``."""
+    return getattr(request, "firebase_identity", None)
 
 
 @require_GET
@@ -33,102 +48,80 @@ def session_detail(request):
     return JsonResponse(
         {
             "authenticated": True,
-            "user": serialize_user(request.user),
+            "user": serialize_user(request.user, _identity(request)),
         }
     )
 
 
+# Counted per address, not per account: every abusive sign-up arrives
+# with a uid of its own, so a per-account limit would count nothing.
 @require_POST
+@throttle(RATE_SIGNIN, scope="signin", by=ADDRESS)
 def session_create(request):
-    """Log a customer in and keep their guest cart."""
-    data, error_response = read_json(request)
-    if error_response is not None:
-        return error_response
+    """Register a Firebase sign-in and keep the customer's guest work.
 
-    username = str(data.get("username", "")).strip()
-    password = str(data.get("password", ""))
+    The middleware has already verified the token and, on a first
+    sign-in, created the Django user. What is left is the handover that
+    the old password login did: the cart and any orders placed as a guest
+    in this browser session belong to the customer now.
+    """
+    identity = _identity(request)
 
-    if not username or not password:
-        return json_error("Username and password are required.", 400)
-
-    # AuthenticationForm applies the project's authentication backends and
-    # the inactive-account check, so the JSON endpoint behaves exactly
-    # like the login page.
-    form = AuthenticationForm(
-        request,
-        data={"username": username, "password": password},
-    )
-
-    if not form.is_valid():
+    if identity is None:
         return json_error(
-            first_form_error(form),
+            "A Firebase sign-in token is required.",
             401,
-            errors=serialize_form_errors(form),
+            code="token_required",
         )
 
-    # login() cycles the session key, and the cart and orders are keyed by
-    # it, so remember the old key and move the cart across.
+    previous_uid = request.session.get(SESSION_UID_KEY, "")
     previous_session_key = request.session.session_key
 
-    login(request, form.get_user())
+    if previous_uid and previous_uid != identity.uid:
+        # A different customer used this browser and did not log out.
+        # Their guest cart must not follow the new one, so the session is
+        # discarded rather than carried over. (The middleware does the
+        # same, so this is belt and braces for a session written since.)
+        request.session.flush()
+        previous_session_key = None
+    else:
+        # Cycle the key for the same reason django.contrib.auth.login()
+        # does: a session id that an attacker fixed before sign-in must
+        # not survive it.
+        request.session.cycle_key()
 
-    reassign_cart_session(
-        previous_session_key,
-        request.session.session_key,
-        request.user,
-    )
-    claim_session_orders(
-        previous_session_key,
-        request.session.session_key,
-        request.user,
-    )
+    request.session[SESSION_UID_KEY] = identity.uid
+
+    if previous_session_key:
+        reassign_cart_session(
+            previous_session_key,
+            request.session.session_key,
+            identity.user,
+        )
+        claim_session_orders(
+            previous_session_key,
+            request.session.session_key,
+            identity.user,
+        )
+
+    record_sign_in(identity)
 
     return JsonResponse(
         {
             "authenticated": True,
-            "user": serialize_user(request.user),
+            "user": serialize_user(identity.user, identity),
         }
     )
 
 
 @require_POST
 def session_delete(request):
-    """Log the current customer out."""
-    logout(request)
+    """Forget this browser's session.
+
+    Signing out of Firebase happens in the browser, which is what stops
+    the SDK sending an ID token. This endpoint drops the session that
+    keyed the cart, so the next customer on this browser does not inherit
+    it.
+    """
+    request.session.flush()
     return JsonResponse({"authenticated": False, "user": None})
-
-
-
-@require_POST
-def account_create(request):
-    """Register a customer without automatically signing them in."""
-    data, error_response = read_json(request)
-    if error_response is not None:
-        return error_response
-
-    form = CustomerRegistrationForm(
-        data={
-            "username": str(data.get("username", "")).strip(),
-            "email": str(data.get("email", "")).strip(),
-            "password1": str(data.get("password1", "")),
-            "password2": str(data.get("password2", "")),
-        }
-    )
-
-    if not form.is_valid():
-        return json_error(
-            first_form_error(form),
-            400,
-            errors=serialize_form_errors(form),
-        )
-
-    form.save()
-
-    # Account created, but the user remains logged out.
-    return JsonResponse(
-        {
-            "authenticated": False,
-            "user": None,
-        },
-        status=201,
-    )

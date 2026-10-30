@@ -12,6 +12,7 @@ from django.views.decorators.http import require_http_methods
 
 from books.models import Book
 from books.serializers import serialize_book_detail
+from config.cache import BOOKS, TTL_ADMIN, cached_json, invalidate
 from config.http import json_error, read_json, staff_required_api
 
 from .forms import BookForm
@@ -31,8 +32,12 @@ def _parse_int(raw, name, default=None):
         return None, f"{name} must be a whole number."
 
 
+# cached_json sits inside staff_required_api, so an unauthorized caller
+# is refused before the cache is consulted and a 401 or 403 is never
+# cached. The entry is SHARED: every administrator sees the same answer.
 @require_http_methods(["GET", "POST"])
 @staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[BOOKS])
 def book_collection(request):
     """GET lists the catalogue for management; POST adds a book."""
     if request.method == "GET":
@@ -90,6 +95,7 @@ def _create_book(request):
         )
 
     book = form.save()
+    invalidate(BOOKS)
 
     return JsonResponse(
         {"book": serialize_book_detail(book)},
@@ -99,6 +105,7 @@ def _create_book(request):
 
 @require_http_methods(["GET", "PATCH", "PUT", "DELETE"])
 @staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[BOOKS])
 def book_detail(request, pk):
     book = Book.objects.filter(pk=pk).first()
 
@@ -138,6 +145,7 @@ def _update_book(request, book):
         )
 
     updated = form.save()
+    invalidate(BOOKS)
 
     return JsonResponse({"book": serialize_book_detail(updated)})
 
@@ -153,5 +161,7 @@ def _delete_book(book):
             "orders. Set its stock to 0 to withdraw it from sale instead.",
             409,
         )
+
+    invalidate(BOOKS)
 
     return JsonResponse({"deleted": True, "id": book.pk})

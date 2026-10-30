@@ -18,7 +18,8 @@ Browser
   │    api.ts  ── one typed fetch wrapper, CSRF + errors
   │    config.ts ─ reads VITE_* environment variables
   │
-  │  HTTP, JSON, session cookie
+  │  HTTP, JSON, Firebase ID token (Bearer) + session cookie for the
+  │  guest cart
   ▼
 Django (backend/)
   urls.py      ── routes /api/<area>/ to an app
@@ -52,6 +53,8 @@ Two rules hold the whole thing together:
 | `settings.py` | Django settings, built from `env`. It never calls `os.environ`. |
 | `urls.py` | Mounts each app under `/api/<area>/`. |
 | `http.py` | Shared JSON helpers: `read_json`, `json_error`, `login_required_api`, `staff_required_api`. |
+| `cache.py` | **The only module that touches the cache.** The `cached_json` decorator, the namespaces, their time to live, and `invalidate`. |
+| `throttle.py` | **The only module that counts requests.** The blanket middleware, the `throttle` decorator, and the limits themselves. |
 | `settings_test.py` | Test-only settings: an isolated SQLite database, so tests never touch the development MySQL database. |
 | `views.py` | Two infrastructure endpoints: `/api/csrf/` and the `/healthz/` liveness probe. |
 | `tests.py` | Covers the deployment-only settings, which no other test exercises because the suite runs with `DEBUG=true`. |
@@ -187,6 +190,48 @@ Plain functions returning dicts. Two things to respect:
 Never expose a secret or a credential. Payments store only the last four
 digits of a card; the full number is never persisted.
 
+### Authentication
+
+Identity comes from **Firebase**, not from a password this project holds.
+The browser signs in with the Firebase SDK (`frontend/src/firebase.ts`)
+and sends the ID token — an RS256 JWT — as `Authorization: Bearer <token>`
+on every request. `accounts/middleware.py` verifies it, resolves the
+Firebase uid to a Django user through `accounts.FirebaseIdentity`, and
+assigns `request.user`. Everything downstream is unchanged: views,
+decorators and query scoping only ever read `request.user`.
+
+Three rules follow from that:
+
+- **Never trust a uid, email or name from the request body.** They come
+  from the verified token's claims or they do not count. The only module
+  that reads a token is `accounts/firebase.py`; the only module that turns
+  claims into a user is `accounts/services.py`.
+- **Firebase cannot grant privileges.** `is_staff` lives on the Django
+  user and is set from the command line (`manage.py grant_admin`) or the
+  Django admin, never from anything the browser sends.
+- **The session cookie is not authentication any more.** It keys the
+  *guest* cart and guest orders, and `accounts/api_views.py` hands those
+  over to the account on sign-in. Anything else keyed by session must be
+  handed over there too — and must not follow one browser from one
+  customer to the next (`SESSION_UID_KEY` is what prevents that). A
+  session user is still honoured when no token is sent, but the only way
+  to get one now is Django's admin login: the template registration and
+  login pages were removed so that Firebase is the single credential
+  path. Do not add another.
+
+Tests mint real tokens with `accounts.tests_firebase.FirebaseTokenMixin`,
+which signs them with a throwaway key and points the verifier's
+certificate fetch at it, so no test has to mock verification away:
+
+```python
+class MyApiTests(FirebaseTokenMixin, TestCase):
+    def test_something(self):
+        response = self.client.get(
+            reverse("order_collection"),
+            HTTP_AUTHORIZATION=f"Bearer {self.make_token(uid='uid-1')}",
+        )
+```
+
 ### Authorization
 
 Use the decorators from `config/http.py`, and apply them to the view, not
@@ -204,11 +249,102 @@ Scope every customer-facing query to the caller. `orders/views.py`
 orders on their account plus their own guest orders from this session,
 and nothing else. Never trust an id from the request to imply ownership.
 
-A subtlety worth knowing: `django.contrib.auth.login()` cycles the
-session key, and the cart and guest orders are keyed by it. The login and
-registration endpoints therefore call `reassign_cart_session` and
-`claim_session_orders`. If you add anything else keyed by session, hand it
-over there too.
+A subtlety worth knowing: `POST /api/auth/signin/` cycles the session key
+(for the same reason `django.contrib.auth.login()` does), and the cart and
+guest orders are keyed by it. That endpoint therefore calls
+`reassign_cart_session` and `claim_session_orders`. If you add anything
+else keyed by session, hand it over there too.
+
+### Caching
+
+Every API read is cached in Redis, and the rule for keeping it correct is
+the same one the frontend follows for its query cache: **a write
+invalidates what it changed.**
+
+A read declares what its answer depends on. `cached_json` goes *inside*
+the authorization decorators, so a 401 or 403 is never cached:
+
+```python
+@require_GET
+@staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[CUSTOMERS, ORDERS])
+def customer_collection(request):
+    ...
+```
+
+- **`namespaces`** are the bodies of data the response is built from.
+  Name every one: the customer list carries order aggregates, so it
+  depends on `ORDERS` as well as `CUSTOMERS`, and a new order must change
+  it.
+- **`scope`** is who may be served the same bytes. The default `SHARED`
+  is for an answer that is identical for everyone allowed to see it.
+  `PER_CALLER` is for anything that embeds the caller — a cart, an order
+  history, a review list with `can_review` — and keys the entry by both
+  the account and the session.
+
+A write then names what it touched:
+
+```python
+# Cancelling releases the stock the order reserved.
+invalidate(ORDERS, BOOKS)
+```
+
+Getting this wrong is how a customer sees stale stock, so when you add an
+endpoint, ask the two questions in order: *what does this answer depend
+on* (the namespaces), and *whose answer is it* (the scope). If a field in
+the payload comes from a model no namespace covers, the response is not
+cacheable yet — add a namespace for it and invalidate it on its writes.
+
+Two things deliberately have no cache: `GET /api/auth/session/`, because
+the login check must reflect a disabled account on the very next request,
+and `GET /api/csrf/`, because it issues a token.
+
+### Rate limiting
+
+`RateLimitMiddleware` already counts every request — a generous limit for
+reads, a tighter one for writes — so a new endpoint is limited the moment
+it exists and needs nothing added.
+
+Reach for `@throttle` only when *attempts* are the thing worth limiting
+rather than volume: signing in, paying, posting a review. It goes below
+the authorization decorators and above `cached_json`, so a refused
+request is not served from the cache and a cached hit still counts:
+
+```python
+@login_required_api
+@throttle(RATE_REVIEW, scope="review")
+def _create_review(request):
+    ...
+```
+
+Then the one question that decides whether the limit works at all: **what
+does an attacker change between attempts?**
+
+- `by=CALLER` (the default) counts per Firebase uid, falling back to the
+  address for an anonymous caller. Right for anything a *signed-in*
+  customer does, because the uid is fixed and unspoofable.
+- `by=ADDRESS` counts per client address. Right when the caller's
+  identity is itself the thing being attempted — sign-in and account
+  creation arrive with a fresh uid each time, so a per-caller window
+  there would never fill. This is what `accounts/middleware.py` uses, and
+  why it limits provisioning *before* creating the Django user.
+
+The cost of `ADDRESS` is that everybody behind one NAT shares a bucket,
+so use it only where it is needed and keep the limit well clear of real
+usage.
+
+Two invariants to preserve:
+
+- **A store failure allows the request.** `consume` swallows everything,
+  because a limiter that returns 429 when Redis blinks turns a cache
+  outage into a site outage. Keep that if you touch it.
+- **Never limit `/healthz/`** (`EXEMPT_PREFIXES`), or a burst of traffic
+  teaches Render that the service is down.
+
+Limits are expressed as constants in `throttle.py`, never as literals at
+the call site, and the test for a new limit asserts the behaviour — the
+nth request is refused and an unrelated caller is not — rather than the
+number.
 
 ---
 
@@ -216,10 +352,26 @@ over there too.
 
 ### `api.ts` — one way to call the server
 
-It adds `Accept`/`Content-Type`, fetches and caches the CSRF token for
-writes, and converts any non-2xx response into a typed `ApiError`
-carrying `status` and the parsed `body`. Add a thin function per
-endpoint; never call `fetch` from a component.
+It adds `Accept`/`Content-Type`, attaches the Firebase ID token as
+`Authorization: Bearer …`, fetches and caches the CSRF token for writes,
+and converts any non-2xx response into a typed `ApiError` carrying
+`status` and the parsed `body`. Add a thin function per endpoint; never
+call `fetch` from a component.
+
+### `firebase.ts` and `hooks/useAuth.tsx` — who is signed in
+
+`firebase.ts` is the only module that talks to the Firebase SDK. It
+initializes lazily (an unconfigured `.env` must not blank the page) and
+converts Firebase's error codes into messages a customer can act on.
+
+`hooks/useAuth.tsx` has two layers, and the split matters:
+`FirebaseAuthProvider` subscribes to the SDK once and holds the
+**authId** — the Firebase uid — keeping it current through sign-in,
+sign-out and hourly token refreshes; `useSession()` then asks the API who
+that token resolves to. The account and `is_staff` are the server's
+answer, never the browser's. `RequireAuth` waits for both before
+deciding, which is what stops a signed-in customer being bounced to the
+login page on every page load.
 
 ### `hooks/` — the data layer
 

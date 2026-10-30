@@ -68,7 +68,7 @@ The following browser and HTTP checks were recorded using a temporary SQLite-bac
 
 - Local backend tests and the recorded performance measurement use SQLite because MySQL credentials were not available and the development database was not to be migrated. The suite is configured to run against MySQL 8.0 in CI.
 - **TC-OBS-019 scope:** The performance test made 20 sequential requests through Django's test client against 40 in-memory SQLite rows. The minimum was 0.0008 s, p90 was 0.0023 s, and maximum was 0.0027 s; 20/20 requests completed within the configured 3.0-second limit. This does not exercise HTTP/WSGI, concurrent load or MySQL. It is not a 500-concurrent-user normal-load test. The SRS OBS-NF-001 normal-operating-condition target and related OBS-NF-005/AT-005 scalability requirement remain unverified.
-- **TC-OBS-022 scope:** Browser verification was performed as a guest. `CartApiTests.test_authenticated_cart_is_linked_to_user` verifies API-level cart association when an authenticated Django session is present, but it is not an end-to-end browser test. The React app has no login UI and does not integrate directly with the Django login page, so the registered-customer flow required by TC-OBS-022 has not been verified end to end.
+- **TC-OBS-022 scope:** Browser verification was performed as a guest. `CartApiTests.test_authenticated_cart_is_linked_to_user` verifies API-level cart association when an authenticated Django session is present, but it is not an end-to-end browser test. At the time of this execution the React app had no login UI, so the registered-customer flow required by TC-OBS-022 was not verified end to end. (It has a Firebase login UI as of 2026-10-29, and the Django login page it refers to has been removed; the registered-customer browser flow has not been re-run, so no end-to-end verification is claimed here either.)
 - The cart is session-based and also associates with the authenticated user when a Django session is present. `CartApiTests.test_authenticated_cart_is_linked_to_user` covers registered-customer association.
 - Prices are displayed in USD via `Intl.NumberFormat`. This is an assumption because the SRS does not specify a currency.
 
@@ -85,8 +85,34 @@ The following browser and HTTP checks were recorded using a temporary SQLite-bac
 
 | Test case | Requirement | Validation | Automated evidence | Result |
 |---|---|---|---|---|
-| TC-OBS-021 | OBS-NF-003 | Verify that the stored credential differs from the original plaintext password and uses an encoded password hash. | `accounts.tests.CustomerRegistrationTests.test_password_is_hashed` | Pass |
-| TC-OBS-030 | OBS-SR-003 | Verify that Django can validate the original password against the stored hash and that the stored value uses the configured password-hashing format. | `accounts.tests.CustomerRegistrationTests.test_password_is_hashed`, `accounts.tests.CustomerRegistrationTests.test_password_hash_uses_configured_hasher` | Pass |
+| TC-OBS-021 | OBS-NF-003 | Verify that the stored credential differs from the original plaintext password and uses an encoded password hash. | `accounts.tests.PasswordStorageTests.test_password_is_hashed` | Pass |
+| TC-OBS-030 | OBS-SR-003 | Verify that Django can validate the original password against the stored hash and that the stored value uses the configured password-hashing format. | `accounts.tests.PasswordStorageTests.test_password_is_hashed`, `accounts.tests.PasswordStorageTests.test_password_hash_uses_configured_hasher` | Pass |
+
+## Update — 2026-10-29: credentials moved to Firebase
+
+Customer sign-in moved to Firebase Authentication (email/password and
+Google), and the Django template registration and login pages were
+removed with it. The requirements are unchanged and still hold, but what
+they apply to has changed:
+
+- **Customer credentials are no longer stored by this project at all.**
+  Firebase holds them; a customer's Django account is created with an
+  *unusable* password, so there is no credential to hash or to leak.
+  `accounts.tests.PasswordStorageTests.test_a_firebase_account_stores_no_password`
+  asserts that, and
+  `accounts.tests.PasswordStorageTests.test_no_password_endpoint_remains`
+  asserts that no password endpoint survived — a second credential path
+  would bypass Firebase.
+- **The passwords that remain** are the administrator accounts for
+  Django's own admin site (`manage.py createsuperuser`). The two
+  validations above were re-pointed at
+  `accounts.tests.PasswordStorageTests`, which asserts exactly what
+  `CustomerRegistrationTests` asserted, against such an account.
+- Firebase's own password handling (hashing, reset emails, rate
+  limiting) is Google's responsibility and is not evidenced here.
+
+The original 2026-10-26 execution below stands as recorded; the test
+names in the table are the current ones.
 
 ## Commands and actual results
 
@@ -97,10 +123,11 @@ python manage.py check
 Recorded result: System check identified no issues (0 silenced).
 
 ```cmd
-python manage.py test accounts.tests.CustomerRegistrationTests
+python manage.py test accounts.tests.PasswordStorageTests
 ```
 
-Recorded result: 7 tests passed.
+Recorded result: 7 tests passed, as `CustomerRegistrationTests` (see the
+update below).
 
 ```cmd
 python manage.py test

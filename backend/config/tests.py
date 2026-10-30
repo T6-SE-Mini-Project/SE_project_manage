@@ -88,6 +88,11 @@ class ProductionSettingsTests(SimpleTestCase):
         "DB_SSL_CA": "/etc/secrets/aiven-ca.pem",
         "DB_SSL_REQUIRED": "true",
         "DB_CONN_MAX_AGE": "60",
+        # Upstash's TCP endpoint is TLS-only, hence rediss://.
+        "REDIS_URL": "rediss://default:not-a-real-password@example.upstash.io:6379",
+        # browser -> Vercel -> Render, so the client address is the second
+        # entry from the right of X-Forwarded-For.
+        "TRUSTED_PROXY_COUNT": "2",
         # Render injects this; config/env.py must fold it into ALLOWED_HOSTS.
         "RENDER_EXTERNAL_HOSTNAME": "bookstore-api.onrender.com",
     }
@@ -111,6 +116,16 @@ print(json.dumps({
     ).get("BACKEND"),
     "db_options": s.DATABASES["default"]["OPTIONS"],
     "db_conn_max_age": s.DATABASES["default"]["CONN_MAX_AGE"],
+    "cache_backend": s.CACHES["default"]["BACKEND"],
+    "cache_location": s.CACHES["default"].get("LOCATION"),
+    "cache_options": s.CACHES["default"].get("OPTIONS", {}),
+    "cache_enabled": s.CACHE_ENABLED,
+    "throttle_cache": s.CACHES.get("throttle", {}).get("BACKEND"),
+    "throttle_enabled": s.THROTTLE_ENABLED,
+    "throttle_read_rate": s.THROTTLE_READ_RATE,
+    "throttle_write_rate": s.THROTTLE_WRITE_RATE,
+    "trusted_proxy_count": s.TRUSTED_PROXY_COUNT,
+    "middleware": list(s.MIDDLEWARE),
 }))
 """
 
@@ -172,6 +187,110 @@ print(json.dumps({
         self.assertEqual(
             settings["csrf_trusted_origins"],
             ["https://bookstore.vercel.app"],
+        )
+
+    def test_deployed_frontend_origin_is_trusted_by_default(self):
+        # A fresh deploy has no CSRF_TRUSTED_ORIGINS in the dashboard (the
+        # blueprint leaves it unset), and without a trusted origin every
+        # POST -- register, login, checkout -- fails with 403. The deployed
+        # site origins are public, so they are defaults rather than another
+        # value someone has to remember to paste in.
+        settings = self.load_settings(CSRF_TRUSTED_ORIGINS="")
+
+        self.assertIn(
+            "https://online-book-store-theta-seven.vercel.app",
+            settings["csrf_trusted_origins"],
+        )
+
+    def test_redis_url_configures_the_cache(self):
+        settings = self.load_settings()
+
+        self.assertEqual(
+            settings["cache_backend"],
+            "django.core.cache.backends.redis.RedisCache",
+        )
+        self.assertTrue(settings["cache_location"].startswith("rediss://"))
+        self.assertTrue(settings["cache_enabled"])
+
+    def test_cache_connections_time_out(self):
+        # Upstash is a network hop away. Without both timeouts a struggling
+        # cache holds every request open instead of degrading to a miss,
+        # which is the one way a cache can take the API down with it.
+        options = self.load_settings()["cache_options"]
+
+        self.assertEqual(options["socket_connect_timeout"], 2)
+        self.assertEqual(options["socket_timeout"], 2)
+        self.assertTrue(options["retry_on_timeout"])
+
+    def test_without_a_redis_url_nothing_is_cached(self):
+        # A per-process cache would be wrong here: each gunicorn worker
+        # would keep its own copy and invalidation in one would not reach
+        # the others, so an unconfigured deployment reads from MySQL.
+        settings = self.load_settings(REDIS_URL="")
+
+        self.assertEqual(
+            settings["cache_backend"],
+            "django.core.cache.backends.dummy.DummyCache",
+        )
+        self.assertFalse(settings["cache_enabled"])
+
+    def test_caching_can_be_switched_off_with_the_url_left_in_place(self):
+        settings = self.load_settings(CACHE_ENABLED="false")
+
+        self.assertFalse(settings["cache_enabled"])
+        # The connection stays configured, so turning it back on needs no
+        # secret to be pasted again.
+        self.assertEqual(
+            settings["cache_backend"],
+            "django.core.cache.backends.redis.RedisCache",
+        )
+
+    def test_rate_limiting_is_on_in_production(self):
+        settings = self.load_settings()
+
+        self.assertTrue(settings["throttle_enabled"])
+        self.assertEqual(settings["throttle_read_rate"], 300)
+        self.assertEqual(settings["throttle_write_rate"], 60)
+        self.assertIn(
+            "config.throttle.RateLimitMiddleware", settings["middleware"]
+        )
+
+    def test_rate_limiting_is_on_even_without_a_cache(self):
+        # The counters fall back to each worker's memory rather than the
+        # dummy backend: a limit per process still limits, while a dummy
+        # backend would silently count nothing and look like it worked.
+        settings = self.load_settings(REDIS_URL="")
+
+        self.assertTrue(settings["throttle_enabled"])
+        self.assertEqual(
+            settings["throttle_cache"],
+            "django.core.cache.backends.locmem.LocMemCache",
+        )
+
+    def test_the_counter_store_uses_redis_when_configured(self):
+        self.assertEqual(
+            self.load_settings()["throttle_cache"],
+            "django.core.cache.backends.redis.RedisCache",
+        )
+
+    def test_the_deployment_knows_how_many_proxies_are_in_front_of_it(self):
+        # At 0, REMOTE_ADDR is Vercel's edge and every anonymous caller
+        # shares one rate-limit bucket; too high and a client can spoof
+        # X-Forwarded-For and never be limited. This deployment is
+        # browser -> Vercel -> Render.
+        self.assertEqual(self.load_settings()["trusted_proxy_count"], 2)
+
+    def test_rate_limiting_runs_after_authentication(self):
+        # Order is load-bearing: a signed-in caller must be counted by
+        # their Firebase uid, not lumped in with everybody else behind the
+        # Vercel proxy.
+        middleware = self.load_settings()["middleware"]
+
+        self.assertGreater(
+            middleware.index("config.throttle.RateLimitMiddleware"),
+            middleware.index(
+                "accounts.middleware.FirebaseAuthenticationMiddleware"
+            ),
         )
 
     def test_platform_hostname_is_added_to_allowed_hosts(self):

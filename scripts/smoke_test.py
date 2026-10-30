@@ -7,21 +7,34 @@ reviews (issue #11), administrator catalogue and order management
 backup records (issue #18), including the authorization boundary that
 keeps customers out of the administrator API.
 
+Authentication is Firebase, so this needs a real Firebase project: the
+script signs both accounts in through Firebase's REST API and sends the
+resulting ID token, exactly as the browser does. The web API key is the
+one in frontend/.env as VITE_FIREBASE_API_KEY, and the backend must run
+with the matching FIREBASE_PROJECT_ID.
+
 It writes data, so point it at a throwaway database, never a shared one.
 
     # Terminal 1 - serve a throwaway SQLite database
     cd backend
     export TEST_SQLITE_NAME=/tmp/obs-smoke.sqlite3
+    export FIREBASE_PROJECT_ID=<your-firebase-project-id>
     python manage.py migrate --settings=config.settings_test
     python manage.py seed_books --settings=config.settings_test
-    python manage.py createsuperuser --settings=config.settings_test \
-        --username storeadmin --email storeadmin@example.com
     DJANGO_SETTINGS_MODULE=config.settings_test \
         gunicorn config.wsgi:application --bind 127.0.0.1:8098
 
-    # Terminal 2
+    # Terminal 2 - the accounts are created in Firebase on first run
     python scripts/smoke_test.py --base-url http://127.0.0.1:8098 \
-        --admin-username storeadmin --admin-password <password>
+        --firebase-api-key <web api key> \
+        --admin-email storeadmin@example.com --admin-password <password> \
+        --customer-email smoke@example.com --customer-password <password>
+
+    # Terminal 1, once only: the administrator account exists as a
+    # customer after its first sign-in, and nothing in the browser may
+    # grant itself is_staff.
+    python manage.py grant_admin storeadmin@example.com \
+        --settings=config.settings_test
 
 Exits non-zero when any check fails.
 """
@@ -36,15 +49,30 @@ from http.cookiejar import CookieJar
 failures = []
 
 BASE = ["http://127.0.0.1:8098"]
-ADMIN = {"username": "storeadmin", "password": ""}
+FIREBASE_API_KEY = [""]
+ACCOUNTS = {"admin": {}, "customer": {}}
+
+# Firebase's own REST endpoints, which are what the SDK calls in the
+# browser. Using them here keeps the script on the real sign-in path
+# instead of a test-only shortcut the application does not have.
+IDENTITY_TOOLKIT = "https://identitytoolkit.googleapis.com/v1/accounts"
 
 
 class Client:
-    def __init__(self, name):
+    def __init__(self, name, token=""):
         self.name = name
+        # The Firebase ID token. The session cookie is kept as well,
+        # because it still keys a guest cart.
+        self.token = token
+        self.last_headers = {}
         self.jar = CookieJar()
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.jar))
+
+    def sign_in(self, email, password):
+        """Sign in through Firebase and register it with the API."""
+        self.token = firebase_token(email, password)
+        return self.call("POST", "/api/auth/signin/")[0]
 
     def token(self):
         self.opener.open(f"{BASE[0]}/api/csrf/", timeout=30).read()
@@ -52,6 +80,9 @@ class Client:
 
     def call(self, method, path, payload=None):
         headers = {"Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        self.last_headers = {}
         data = None
         if method not in ("GET", "HEAD"):
             headers["X-CSRFToken"] = self.token()
@@ -62,6 +93,7 @@ class Client:
         try:
             with self.opener.open(req, timeout=30) as resp:
                 body = resp.read().decode()
+                self.last_headers = dict(resp.headers)
                 return resp.status, (json.loads(body) if body.strip() else {})
         except urllib.error.HTTPError as exc:
             body = exc.read().decode()
@@ -69,6 +101,41 @@ class Client:
                 return exc.code, json.loads(body)
             except json.JSONDecodeError:
                 return exc.code, {"raw": body[:200]}
+
+def firebase_call(endpoint, payload):
+    """POST to a Firebase identity endpoint and return the response."""
+    request = urllib.request.Request(
+        f"{IDENTITY_TOOLKIT}:{endpoint}?key={FIREBASE_API_KEY[0]}",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        body = json.loads(exc.read().decode() or "{}")
+        return {"error": body.get("error", {}).get("message", str(exc.code))}
+
+
+def firebase_token(email, password):
+    """An ID token for this account, creating it on the first run."""
+    credentials = {"email": email, "password": password, "returnSecureToken": True}
+
+    signed_in = firebase_call("signInWithPassword", credentials)
+    if "idToken" in signed_in:
+        return signed_in["idToken"]
+
+    # EMAIL_NOT_FOUND on the first run: create the account and retry.
+    created = firebase_call("signUp", credentials)
+    if "idToken" in created:
+        return created["idToken"]
+
+    raise SystemExit(
+        f"Firebase sign-in failed for {email}: "
+        f"{signed_in.get('error')} / {created.get('error')}"
+    )
+
 
 def check(label, got, want):
     ok = got == want
@@ -82,11 +149,20 @@ def run_checks():
     customer = Client("customer")
     admin = Client("admin")
 
+    print("\n== Firebase authentication ==")
+    check("guest session is anonymous",
+          Client("g").call("GET", "/api/auth/session/")[1]["authenticated"], False)
+    check("a forged token is refused",
+          Client("f", token="not.a.real.token").call("GET", "/api/auth/session/")[0], 401)
+    check("customer signs in with Firebase",
+          customer.sign_in(ACCOUNTS["customer"]["email"],
+                           ACCOUNTS["customer"]["password"]), 200)
+    status, session = customer.call("GET", "/api/auth/session/")
+    check("session reports the customer", session["authenticated"], True)
+    check("the uid is stored against the account", bool(session["user"]["uid"]), True)
+    check("a customer is not staff", session["user"]["is_staff"], False)
+
     print("\n== Issue #10: order placement, history and cancellation ==")
-    status, body = customer.call("POST", "/api/auth/register/", {
-        "username": "smokecustomer", "email": "smoke@example.com",
-        "password1": "SmokePass12345", "password2": "SmokePass12345"})
-    check("register customer", status, 201)
 
     status, books = customer.call("GET", "/api/books/")
     book = books["books"][0]
@@ -141,8 +217,16 @@ def run_checks():
         check(f"customer blocked from {path}", customer.call("GET", path)[0], 403)
         check(f"guest blocked from {path}", Client("g").call("GET", path)[0], 401)
 
-    check("admin login", admin.call("POST", "/api/auth/login/", {
-        "username": "storeadmin", "password": "AdminPass12345"})[0], 200)
+    check("administrator signs in with Firebase",
+          admin.sign_in(ACCOUNTS["admin"]["email"],
+                        ACCOUNTS["admin"]["password"]), 200)
+    status, admin_session = admin.call("GET", "/api/auth/session/")
+    if not admin_session["user"]["is_staff"]:
+        raise SystemExit(
+            "The administrator account is not staff yet. Run\n"
+            f"  python manage.py grant_admin {ACCOUNTS['admin']['email']}\n"
+            "in backend/ (with the same --settings) and run this again."
+        )
 
     print("\n== Issue #12: catalogue management ==")
     status, created = admin.call("POST", "/api/admin/books/", {
@@ -184,11 +268,15 @@ def run_checks():
     print("\n== Issue #24: customers and sales reports ==")
     status, customers = admin.call("GET", "/api/admin/customers/")
     check("customer list", status, 200)
-    row = next(c for c in customers["customers"] if c["username"] == "smokecustomer")
+    row = next(c for c in customers["customers"]
+               if c["email"].lower() == ACCOUNTS["customer"]["email"].lower())
     check("order count aggregated", row["order_count"], 2)
-    check("own account cannot be deactivated", admin.call("POST", f"/api/admin/customers/{next(c['id'] for c in customers['customers'] if c['username'] == 'storeadmin')}/status/", {"is_active": False})[0], 400)
+    check("own account cannot be deactivated", admin.call("POST", f"/api/admin/customers/{admin_session['user']['id']}/status/", {"is_active": False})[0], 400)
     check("deactivate customer", admin.call("POST", f"/api/admin/customers/{row['id']}/status/", {"is_active": False})[0], 200)
-    check("deactivated customer cannot log in", Client("x").call("POST", "/api/auth/login/", {"username": "smokecustomer", "password": "SmokePass12345"})[0], 401)
+    # Firebase keeps issuing a deactivated customer tokens -- deactivation
+    # is a decision only this project knows about -- so the refusal is the
+    # API's, and 403 says that signing in again will not help.
+    check("deactivated customer is refused", Client("x", token=customer.token).call("GET", "/api/auth/session/")[0], 403)
     check("reactivate customer", admin.call("POST", f"/api/admin/customers/{row['id']}/status/", {"is_active": True})[0], 200)
 
     status, report = admin.call("GET", "/api/admin/reports/sales/")
@@ -198,6 +286,53 @@ def run_checks():
     check("cancelled order excluded from revenue", r["order_count"], 1)
     check("bad period refused", admin.call("GET", "/api/admin/reports/sales/?start=notadate")[0], 400)
 
+    print("\n== Response cache ==")
+    guest = Client("cache")
+    guest.call("GET", "/api/books/")
+    first = guest.last_headers.get("X-Cache")
+
+    if first is None:
+        print("  [SKIP] caching is off on this deployment (no REDIS_URL)")
+    else:
+        guest.call("GET", "/api/books/")
+        check("second catalogue read is a cache hit",
+              guest.last_headers.get("X-Cache"), "HIT")
+
+        # A catalogue write must reach the cached read at once, not when
+        # the TTL lapses.
+        admin.call("PATCH", f"/api/admin/books/{book['id']}/",
+                   {"stock_quantity": stock_before})
+        guest.call("GET", "/api/books/")
+        check("a write invalidates the cached catalogue",
+              guest.last_headers.get("X-Cache"), "MISS")
+
+        # Identity must never be served from cache.
+        customer.call("GET", "/api/auth/session/")
+        check("the session endpoint is not cached",
+              customer.last_headers.get("X-Cache"), None)
+
+    print("\n== Rate limiting ==")
+    limiter = Client("limits")
+    limiter.call("GET", "/api/books/")
+    limit = limiter.last_headers.get("X-RateLimit-Limit")
+
+    if limit is None:
+        print("  [SKIP] rate limiting is off on this deployment")
+    else:
+        print(f"  read limit={limit}")
+        first = int(limiter.last_headers.get("X-RateLimit-Remaining", -1))
+        limiter.call("GET", "/api/books/")
+        second = int(limiter.last_headers.get("X-RateLimit-Remaining", -1))
+        # The counter must move, otherwise the limit is being written
+        # somewhere that is never read back.
+        check("a second read spends one of the allowance", second, first - 1)
+
+        # Health must stay uncounted, or a burst of traffic makes the
+        # platform think the service is down.
+        limiter.call("GET", "/healthz/")
+        check("the health check is not rate limited",
+              limiter.last_headers.get("X-RateLimit-Limit"), None)
+
     print("\n== Issue #18: backups ==")
     status, backups = admin.call("GET", "/api/admin/backups/")
     check("backup endpoint", status, 200)
@@ -206,13 +341,20 @@ def run_checks():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default="http://127.0.0.1:8098")
-    parser.add_argument("--admin-username", default="storeadmin")
+    parser.add_argument("--firebase-api-key", required=True,
+                        help="Firebase web API key (VITE_FIREBASE_API_KEY).")
+    parser.add_argument("--admin-email", default="storeadmin@example.com")
     parser.add_argument("--admin-password", required=True)
+    parser.add_argument("--customer-email", default="smoke@example.com")
+    parser.add_argument("--customer-password", required=True)
     args = parser.parse_args(argv)
 
     BASE[0] = args.base_url.rstrip("/")
-    ADMIN["username"] = args.admin_username
-    ADMIN["password"] = args.admin_password
+    FIREBASE_API_KEY[0] = args.firebase_api_key
+    ACCOUNTS["admin"] = {"email": args.admin_email,
+                         "password": args.admin_password}
+    ACCOUNTS["customer"] = {"email": args.customer_email,
+                            "password": args.customer_password}
 
     run_checks()
 

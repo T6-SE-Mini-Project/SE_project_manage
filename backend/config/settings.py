@@ -52,6 +52,16 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Identifies API callers from their Firebase ID token, after Django's
+    # own middleware has resolved any session user. A bearer token wins
+    # over the session; without one the session still signs in the Django
+    # admin site. See accounts/middleware.py.
+    "accounts.middleware.FirebaseAuthenticationMiddleware",
+    # Per-caller rate limits. After the Firebase middleware on purpose: a
+    # signed-in caller is then counted by their uid instead of sharing a
+    # bucket with everybody else behind the Vercel proxy. See
+    # config/throttle.py.
+    "config.throttle.RateLimitMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -100,6 +110,70 @@ DATABASES = {
         },
     }
 }
+
+
+# Cache
+#
+# Redis when REDIS_URL is set (Upstash in production, over TLS), and
+# Django's dummy backend otherwise, so an unconfigured deployment reads
+# from MySQL instead of from a per-worker cache that cannot be invalidated
+# across workers. config/cache.py is the only module that uses it.
+#
+# The "throttle" alias holds the rate-limit counters. It falls back to
+# local memory rather than the dummy backend, because a limit counted per
+# worker process still limits, while a dummy backend silently counts
+# nothing at all.
+if env.REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": env.REDIS_URL,
+            "OPTIONS": {
+                # Forwarded to redis.ConnectionPool.from_url. The two
+                # timeouts are what stop a struggling cache from holding
+                # requests open; config/cache.py turns the resulting
+                # errors into cache misses.
+                "socket_connect_timeout": env.REDIS_TIMEOUT,
+                "socket_timeout": env.REDIS_TIMEOUT,
+                "retry_on_timeout": True,
+                # Upstash drops idle connections; this re-checks one
+                # before it is handed to a request.
+                "health_check_interval": 30,
+                # Each gunicorn worker holds its own pool, so keep the
+                # total within the plan's connection limit.
+                "max_connections": 16,
+            },
+        },
+    }
+    CACHES["throttle"] = {
+        **CACHES["default"],
+        # Counters are small and short-lived; keeping them in their own
+        # Redis database keeps a cache flush from clearing them and makes
+        # them easy to inspect.
+        "KEY_PREFIX": "throttle",
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.dummy.DummyCache",
+        },
+        "throttle": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "obs-throttle",
+        },
+    }
+
+# Read by config/cache.py on every cached view. Setting CACHE_ENABLED=false
+# turns response caching off without removing REDIS_URL.
+CACHE_ENABLED = env.CACHE_ENABLED
+
+
+# Rate limiting, read by config/throttle.py. See config/env.py for what
+# TRUSTED_PROXY_COUNT does and why it has to match the deployment.
+THROTTLE_ENABLED = env.THROTTLE_ENABLED
+THROTTLE_READ_RATE = env.THROTTLE_READ_RATE
+THROTTLE_WRITE_RATE = env.THROTTLE_WRITE_RATE
+TRUSTED_PROXY_COUNT = env.TRUSTED_PROXY_COUNT
 
 
 # Password validation

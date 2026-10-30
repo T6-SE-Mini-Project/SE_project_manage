@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "./config";
+import { currentIdToken } from "./firebase";
 import type {
   AdminBookFilters,
   AdminBookListResponse,
@@ -19,12 +20,10 @@ import type {
   CustomerDetailResponse,
   CustomerListResponse,
   CustomerResponse,
-  LoginInput,
   OrderListResponse,
   OrderResponse,
   OrderStatus,
   PaymentResponse,
-  RegisterInput,
   ReviewInput,
   ReviewListResponse,
   ReviewResponse,
@@ -44,6 +43,21 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
   }
+}
+
+/**
+ * Whether a failed request is worth retrying.
+ *
+ * A 4xx will not become a 2xx by being asked again: the request is wrong,
+ * the caller is not allowed, or — for `429` — they have already made too
+ * many, and a retry spends the next window's allowance as well. Network
+ * failures and 5xx are worth one more attempt.
+ */
+export function shouldRetry(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status < 500) {
+    return false;
+  }
+  return failureCount < 1;
 }
 
 function readCookie(name: string): string {
@@ -92,11 +106,18 @@ async function request<T>(
     headers?: Record<string, string>;
   } = {},
 ): Promise<T> {
+  // Who the caller is comes from the Firebase ID token, on every request:
+  // the backend's middleware verifies it and resolves the account. The
+  // session cookie still rides along (credentials: "same-origin") because
+  // it keys a *guest* cart, but it no longer authenticates anybody.
+  const token = await currentIdToken();
+
   const options: RequestInit = {
     method,
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
   };
@@ -208,22 +229,34 @@ export function payOrder(input: CardPaymentInput): Promise<PaymentResponse> {
 }
 
 
-/* --- Accounts (session authentication) ------------------------------- */
+/* --- Accounts (Firebase authentication) ------------------------------ */
 
+/** The login check: who the current ID token identifies, if anybody. */
 export function getSession(): Promise<SessionResponse> {
   return request("/auth/session/");
 }
 
-export function login(input: LoginInput): Promise<SessionResponse> {
-  return request("/auth/login/", { method: "POST", body: input });
+/**
+ * Registers a Firebase sign-in with the API.
+ *
+ * Called once, straight after the Firebase SDK reports a successful
+ * sign-in. It links the Firebase uid to a customer account (creating one
+ * on a first sign-in) and hands over anything done as a guest in this
+ * browser: the cart, and any order placed before signing in.
+ */
+export function syncSession(): Promise<SessionResponse> {
+  return request("/auth/signin/", { method: "POST", body: {} });
 }
 
-export function logout(): Promise<SessionResponse> {
+/**
+ * Ends the browser session that keyed the guest cart.
+ *
+ * Signing out of Firebase happens in the browser; that is what stops the
+ * ID token being sent. This tells the API to forget the session, so the
+ * next person on this browser does not inherit the cart.
+ */
+export function endSession(): Promise<SessionResponse> {
   return request("/auth/logout/", { method: "POST", body: {} });
-}
-
-export function register(input: RegisterInput): Promise<SessionResponse> {
-  return request("/auth/register/", { method: "POST", body: input });
 }
 
 /* --- Orders (issue #10) ---------------------------------------------- */

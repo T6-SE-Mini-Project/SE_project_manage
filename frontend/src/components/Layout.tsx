@@ -1,7 +1,7 @@
 
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
-import { useLogout, useSession } from "../hooks/useAuth";
+import { useAccountName, useSession, useSignOut } from "../hooks/useAuth";
 import { useCart } from "../hooks/useBookStore";
 
 function navClass({ isActive }: { isActive: boolean }) {
@@ -10,15 +10,16 @@ function navClass({ isActive }: { isActive: boolean }) {
 
 export default function Layout() {
   const navigate = useNavigate();
-  const { user, isAuthenticated, isStaff } = useSession();
-  const logoutMutation = useLogout();
+  const { isAuthenticated, isStaff } = useSession();
+  const accountName = useAccountName();
+  const signOutMutation = useSignOut();
   const cartQuery = useCart();
 
   const itemCount = cartQuery.data?.cart.item_count ?? 0;
 
   async function handleLogout() {
     try {
-      await logoutMutation.mutateAsync(undefined);
+      await signOutMutation.mutateAsync();
       navigate("/login", { replace: true });
     } catch {
       // Keep the user on the current page if logout fails.
@@ -28,10 +29,7 @@ export default function Layout() {
   return (
     <div className="app-shell">
       <header className="site-header">
-        <Link
-          className="brand"
-          to={isAuthenticated ? "/books" : "/register"}
-        >
+        <Link className="brand" to={isAuthenticated ? "/books" : "/login"}>
           <span className="brand-mark" aria-hidden="true">
             OBS
           </span>
@@ -63,14 +61,16 @@ export default function Layout() {
             </nav>
 
             <div className="site-account">
-              <span className="account-name">{user?.username}</span>
+              <span className="account-name" title={accountName}>
+                {accountName}
+              </span>
               <button
                 type="button"
                 className="button secondary small"
                 onClick={handleLogout}
-                disabled={logoutMutation.isPending}
+                disabled={signOutMutation.isPending}
               >
-                {logoutMutation.isPending ? "Logging out..." : "Log out"}
+                {signOutMutation.isPending ? "Logging out..." : "Log out"}
               </button>
             </div>
           </>

@@ -10,6 +10,7 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 
+from config.cache import BOOKS, ORDERS, TTL_ADMIN, cached_json, invalidate
 from config.http import json_error, read_json, staff_required_api
 from orders.models import Order
 from orders.serializers import serialize_order, serialize_order_summary
@@ -41,6 +42,7 @@ def _parse_page_size(raw):
 
 @require_GET
 @staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[ORDERS])
 def order_collection(request):
     """List all orders, newest first, with status and customer filters."""
     orders = Order.objects.select_related("user").prefetch_related("items")
@@ -98,6 +100,7 @@ def order_collection(request):
 
 @require_GET
 @staff_required_api
+@cached_json(TTL_ADMIN, namespaces=[ORDERS])
 def order_detail(request, pk):
     order = (
         Order.objects.select_related("user")
@@ -166,6 +169,8 @@ def order_status(request, pk):
         .get(pk=updated.pk)
     )
 
+    invalidate(ORDERS)
+
     return JsonResponse({"order": serialize_order_summary(updated)})
 
 
@@ -196,5 +201,8 @@ def order_cancel(request, pk):
         .prefetch_related("items")
         .get(pk=cancelled.pk)
     )
+
+    # Cancelling releases the order's reserved stock.
+    invalidate(ORDERS, BOOKS)
 
     return JsonResponse({"order": serialize_order_summary(cancelled)})
