@@ -306,3 +306,86 @@ The order-placement and payment code was implemented earlier on this
 branch; the tests above were re-run after the issue #10 changes (which
 added `paid_at` and `stock_reserved` to the payment path) and continue to
 pass, together with the end-to-end verification recorded above.
+
+## TC-OBS-020 — OBS-NF-002 monthly availability observation
+
+**Execution timestamp:** 2026-10-31 23:32:12
+**Environment:** Deployed Render backend
+**Endpoint:** `https://bookstore-api-7g5z.onrender.com/healthz/`
+
+| Measurement | Observed result |
+|---|---|
+| HTTP status | 200 |
+| Response time | 2.33 seconds |
+| Response body | `{"status": "ok"}` |
+| Request result | Responded successfully |
+
+**Observation:** The deployed backend health endpoint returned HTTP 200
+with the expected healthy status response. This confirms that the endpoint
+was reachable at the recorded timestamp.
+
+**Result: Point-in-time health check successful. Monthly availability
+requirement not yet verified.**
+
+### Limitations
+
+- This is one health-check observation, not continuous monitoring.
+- No complete monthly service-availability record has been collected here.
+- The 99% monthly availability target, excluding scheduled maintenance,
+  cannot be marked as passed based on this observation alone.
+- Continuous monitoring records are required to calculate and verify
+  monthly availability.
+
+
+## Issue #27 — Backend integration and system test execution
+
+**Execution date:** 2026-10-31
+**Environment:** Local Windows development environment
+**Framework:** Django 5.2.18
+**Test settings:** `config.settings_test`
+**Database:** Isolated in-memory SQLite test database
+
+Command executed:
+
+`python manage.py test --settings=config.settings_test`
+
+| Measurement | Result |
+|---|---:|
+| Tests discovered | 330 |
+| Tests passed | 330 |
+| Failures | 0 |
+| Errors | 0 |
+| Execution time | 13.868 seconds |
+| Django system checks | No issues |
+
+**Additional verification:** TC-OBS-019 search timing test passed.
+All 20 requests completed within the configured 3.0-second threshold.
+
+**Initial test-run issue:** One administrator access test initially raised
+a missing static-files manifest error. Running
+`python manage.py collectstatic --noinput --settings=config.settings_test`
+generated the manifest. The previously failing test was rerun independently
+and passed. The complete suite was then rerun successfully.
+
+**Result: Pass for the 330 automated backend tests.**
+
+### Limitations
+
+- Tests used an isolated SQLite database, not production MySQL.
+- This run does not independently establish production payment-provider
+  behaviour or complete browser-based end-to-end coverage.
+- Existing integration-smoke-test evidence is recorded separately in
+  `Docs/evidence/integration-smoke-test.txt`.
+
+
+## Issue #28 — Regression testing summary
+
+**Execution date:** 2026-10-31
+
+- Backend regression suite: 330/330 tests passed.
+- Django system checks: no issues.
+- Frontend automated regression: not executed locally because npm dependency installation failed. GitHub Actions is configured to run frontend type-checking, tests and production build.
+- Existing integration evidence: `Docs/evidence/integration-smoke-test.txt`.
+- Outstanding observations: `Docs/Defect_Register.md`.
+
+**Result:** Backend regression tests passed. Full frontend regression verification is pending a successful GitHub Actions run.
