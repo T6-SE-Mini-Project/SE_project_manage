@@ -229,8 +229,11 @@ npm run build
 The recorded demonstration is stored at:
 
 ```text
-docs/demos/billing-address-demo.mp4
+Docs/demos/billing-address-demo.mp4
 ```
+
+(On Windows the folder name is case-insensitive, so `docs/demos/...` resolves to
+the same file.)
 
 It is 1 minute 56 seconds at 1280x800 (H.264, about 4.2 MB), comfortably below
 GitHub's 100 MB per-file limit, so Git LFS is not required. The video is a
