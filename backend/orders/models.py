@@ -1,7 +1,105 @@
+import hashlib
 from decimal import Decimal
 
 from django.conf import settings
+from django.core.validators import RegexValidator
 from django.db import models
+
+PHONE_NUMBER_VALIDATOR = RegexValidator(
+    r"^\d{10}$",
+    "Phone number must be exactly 10 digits.",
+)
+
+PIN_CODE_VALIDATOR = RegexValidator(
+    r"^\d{6}$",
+    "PIN code must be exactly 6 digits.",
+)
+
+
+class BillingAddress(models.Model):
+    """Billing details attached to an order and optionally saved.
+
+    An authenticated customer can keep reusable addresses; the checkout API
+    deduplicates them by a fingerprint of the normalised values. A guest
+    checkout stores the address as an order snapshot and never attaches it
+    to an account.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="billing_addresses",
+    )
+    full_name = models.CharField(max_length=150)
+    phone_number = models.CharField(
+        max_length=10,
+        validators=[PHONE_NUMBER_VALIDATOR],
+    )
+    email = models.EmailField()
+    address_line1 = models.CharField(max_length=255)
+    address_line2 = models.CharField(max_length=255, blank=True)
+    city = models.CharField(max_length=100)
+    state = models.CharField(max_length=100)
+    postal_code = models.CharField(
+        max_length=6,
+        validators=[PIN_CODE_VALIDATOR],
+    )
+    country = models.CharField(max_length=100, default="India")
+    fingerprint = models.CharField(max_length=64, editable=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-pk"]
+        indexes = [
+            models.Index(
+                fields=["user", "fingerprint"],
+                name="billing_user_fingerprint_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.full_name}, {self.city} {self.postal_code}"
+
+    def normalized_values(self):
+        return {
+            "full_name": " ".join((self.full_name or "").split()),
+            "phone_number": (self.phone_number or "").strip(),
+            "email": (self.email or "").strip().lower(),
+            "address_line1": " ".join((self.address_line1 or "").split()),
+            "address_line2": " ".join((self.address_line2 or "").split()),
+            "city": " ".join((self.city or "").split()),
+            "state": " ".join((self.state or "").split()),
+            "postal_code": (self.postal_code or "").strip(),
+            "country": " ".join((self.country or "India").split()),
+        }
+
+    def calculate_fingerprint(self):
+        values = self.normalized_values()
+        payload = "|".join(
+            values[field].lower()
+            for field in (
+                "full_name",
+                "phone_number",
+                "email",
+                "address_line1",
+                "address_line2",
+                "city",
+                "state",
+                "postal_code",
+                "country",
+            )
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def save(self, *args, **kwargs):
+        for field, value in self.normalized_values().items():
+            setattr(self, field, value)
+
+        self.fingerprint = self.calculate_fingerprint()
+        super().save(*args, **kwargs)
 
 
 class Order(models.Model):
@@ -64,6 +162,16 @@ class Order(models.Model):
         related_name="orders",
     )
     session_key = models.CharField(max_length=40, db_index=True)
+    # The address the customer entered at checkout. Kept with the order as
+    # an immutable snapshot; older orders placed before this feature have
+    # no billing address.
+    billing_address = models.ForeignKey(
+        BillingAddress,
+        blank=True,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="orders",
+    )
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
