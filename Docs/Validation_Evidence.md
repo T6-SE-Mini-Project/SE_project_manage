@@ -389,3 +389,91 @@ and passed. The complete suite was then rerun successfully.
 - Outstanding observations: `Docs/Defect_Register.md`.
 
 **Result:** Backend regression tests passed. Full frontend regression verification is pending a successful GitHub Actions run.
+
+
+
+---
+
+# Validation Evidence — Issue #23: Final Security Validation
+
+- **Branch:** `feature/issue-23-final-security-validation`
+- **Execution date:** 2026-11-01
+- **Environment:** Windows, Python 3.13.14, Django 5.2.18, Node.js 22.19.0, npm 10.9.3
+- **Backend test settings:** `config.settings_test`
+- **Test database:** Isolated in-memory SQLite
+- **Scope:** OBS-SR-001, OBS-SR-002, OBS-SR-004, OBS-SR-005 and OBS-SR-006.
+- **Exclusion:** OBS-SR-003 is excluded because password storage was validated under Issue #15.
+
+## Security requirement results
+
+| Requirement | Validation performed | Evidence | Result |
+|---|---|---|---|
+| OBS-SR-001 — Authentication | Tested anonymous access, valid token authentication, invalid/expired tokens and protected API access. | `accounts.tests_api` | Pass |
+| OBS-SR-002 — Role-based authorization | Tested anonymous, customer and administrator access to administrator endpoints. | `administration.tests` — `AdminAuthorizationTests` | Pass |
+| OBS-SR-004 — HTTPS/TLS | Checked deployed frontend and backend HTTPS endpoints, HTTP redirect and security headers. | Live `curl` requests recorded below | Pass |
+| OBS-SR-005 — Unauthorized modification prevention | Tested customer attempts to create books, update stock, change order status and deactivate accounts. Verified rejected changes did not modify protected records. | `administration.tests.AdminAuthorizationTests`; `AdminCatalogueTests.test_customer_cannot_update_book_stock` | Pass |
+| OBS-SR-006 — Inactivity-based session termination | Inspected backend session settings and frontend Firebase authentication implementation for inactivity detection and automatic logout. | `backend/config/settings.py`; `frontend/src/firebase.ts`; search for inactivity and auto-logout handling | Not satisfied — DEF-05 |
+
+## OBS-SR-004 — HTTPS/TLS verification
+
+### Frontend
+
+Endpoint: `https://online-book-store-theta-seven.vercel.app`
+
+- HTTPS request returned HTTP 200 OK.
+- HTTP request returned HTTP 308 Permanent Redirect to the HTTPS URL.
+- HSTS header: `max-age=63072000; includeSubDomains; preload`.
+- `X-Content-Type-Options: nosniff`.
+- `X-Frame-Options: DENY`.
+
+### Backend
+
+Endpoint: `https://bookstore-api-7g5z.onrender.com/healthz/`
+
+- Initial HEAD request returned HTTP 405 because the endpoint allows GET.
+- GET request returned HTTP 200 OK.
+- Response body: `{"status": "ok"}`.
+- HSTS header: `max-age=31536000; includeSubDomains`.
+- `X-Content-Type-Options: nosniff`.
+- `X-Frame-Options: DENY`.
+
+**Result:** HTTPS access was verified for both deployed endpoints. The frontend redirects HTTP to HTTPS. These checks establish endpoint-level HTTPS behavior; they do not constitute a full TLS penetration test.
+
+## OBS-SR-005 — Unauthorized modification verification
+
+The following checks were performed:
+
+- A customer attempting to create a book received HTTP 403, and no book was created.
+- A customer attempting to change an order status received HTTP 403, and the original order status remained unchanged.
+- A customer attempting to deactivate an account received HTTP 403, and the account remained active.
+- A new test, `AdminCatalogueTests.test_customer_cannot_update_book_stock`, was added. It attempts to update an existing book's stock as a customer, expects HTTP 403 and verifies that stock remains at 8.
+- An administrator stock-update test confirms that authorized administrators can update inventory.
+
+The newly added stock authorization test passed independently.
+
+**Result:** Pass for the tested inventory and order modification operations.
+
+## OBS-SR-006 — Session inactivity timeout finding
+
+The backend configuration defines `SESSION_COOKIE_AGE = 900` and `SESSION_SAVE_EVERY_REQUEST = True`.
+
+However, the inspected Django session cookie is used for guest cart and order data. Customer authentication is handled through Firebase.
+
+The frontend uses Firebase `browserLocalPersistence` and `onIdTokenChanged`. Token refresh is supported, but no application-level inactivity detection or automatic logout mechanism was found.
+
+A source search for `lastActivity`, `idleTimeout`, `inactivity`, `autoLogout`, `setTimeout` and related terms found no inactivity implementation. The only `setTimeout` match was in a unit test.
+
+Therefore, the 900-second guest session expiry does not establish authenticated customer inactivity termination.
+
+**Result: Not satisfied by the current implementation.**
+
+**Defect recorded:** DEF-05 in `Docs/Defect_Register.md`.
+
+## Full regression test execution
+
+### Backend
+
+Command:
+
+```cmd
+python manage.py test --settings=config.settings_test -v 1

@@ -277,7 +277,17 @@ class AdminCatalogueTests(AdminTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("isbn", response.json()["errors"])
         self.assertEqual(Book.objects.count(), 1)
+    def test_customer_cannot_update_book_stock(self):
+        response = self.patch_json(
+            self.customer_client,
+            reverse("admin_book_detail", args=[self.book.pk]),
+            {"stock_quantity": 25},
+        )
 
+        self.assertEqual(response.status_code, 403)
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.stock_quantity, 8)
     def test_administrator_can_update_stock_and_price(self):
         response = self.patch_json(
             self.admin_client,
