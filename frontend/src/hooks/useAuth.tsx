@@ -1,21 +1,14 @@
+
 /**
  * Authentication hooks: Firebase for identity, TanStack Query for state.
  *
- * Two layers, deliberately separate:
+ * Firebase owns authentication. Django resolves the account and permissions.
+ * Customer-specific cached data is cleared whenever the account changes.
  *
- * 1. `FirebaseAuthProvider` subscribes to the Firebase SDK once, for the
- *    whole app, and holds the **authId** — the Firebase uid of whoever
- *    is signed in. The SDK fires on sign-in, sign-out and every token
- *    refresh, so the provider is what keeps that value correct without
- *    any screen polling for it.
- * 2. `useSession()` asks the API who that token resolves to. The account
- *    (and `is_staff`) is the server's answer, never the browser's: the
- *    Firebase token says *who* the customer is, only Django says what
- *    they may do.
- *
- * Signing in or out also clears cached per-customer data (cart, orders,
- * reviews, admin), so one customer never sees another customer's data.
+ * Authenticated sessions automatically expire after 15 minutes without
+ * customer activity. Activity timestamps are shared across browser tabs.
  */
+
 import {
   createContext,
   useContext,
@@ -44,20 +37,27 @@ import type {
   SessionResponse,
 } from "../types";
 
+// 15 minutes without activity.
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+
+// Shared between tabs belonging to the same browser origin.
+const LAST_ACTIVITY_KEY = "obs_last_activity";
+
+// In-memory fallback if localStorage is unavailable.
+let fallbackLastActivity = 0;
+
+// Avoid writing to localStorage on every mouse movement.
+const ACTIVITY_WRITE_INTERVAL_MS = 1000;
+
 export const authKeys = {
   session: () => ["auth", "session"] as const,
 };
 
 interface FirebaseAuthState {
-  /** The Firebase uid of the signed-in customer, or null. */
   authId: string | null;
-  /** The email address Firebase holds for them. */
   email: string | null;
-  /** The display name Firebase holds for them, when set. */
   displayName: string | null;
-  /** True once the SDK has reported its initial state. */
   isReady: boolean;
-  /** False when the VITE_FIREBASE_* variables are missing. */
   isConfigured: boolean;
 }
 
@@ -71,25 +71,79 @@ const ANONYMOUS: FirebaseAuthState = {
 
 const FirebaseAuthContext = createContext<FirebaseAuthState>({
   ...ANONYMOUS,
-  // A component rendered outside the provider would otherwise wait for a
-  // readiness that never arrives.
   isReady: true,
 });
 
 /**
- * Holds the Firebase sign-in state for the whole app.
- *
- * Mounted once, above the router, in `main.tsx`.
+ * Reads the last activity timestamp shared across browser tabs,
+ * with an in-memory fallback if localStorage is unavailable.
  */
-export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
+function readLastActivity(): number {
+  try {
+    const value = window.localStorage.getItem(LAST_ACTIVITY_KEY);
+    const timestamp = Number(value);
+
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      fallbackLastActivity = Math.max(
+        fallbackLastActivity,
+        timestamp,
+      );
+    }
+  } catch {
+    // Use the in-memory timestamp when storage is unavailable.
+  }
+
+  return fallbackLastActivity;
+}
+
+/**
+ * Saves the latest customer activity.
+ */
+function saveLastActivity(timestamp: number): void {
+  fallbackLastActivity = timestamp;
+
+  try {
+    window.localStorage.setItem(
+      LAST_ACTIVITY_KEY,
+      String(timestamp),
+    );
+  } catch {
+    // The current tab continues tracking activity in memory.
+  }
+}
+
+/**
+ * Clears customer-specific cached data.
+ */
+function resetCustomerData(
+  queryClient: ReturnType<typeof useQueryClient>,
+): void {
+  void queryClient.invalidateQueries({ queryKey: ["cart"] });
+  void queryClient.invalidateQueries({ queryKey: ["orders"] });
+  void queryClient.invalidateQueries({ queryKey: ["reviews"] });
+  void queryClient.invalidateQueries({ queryKey: ["admin"] });
+}
+
+/**
+ * Holds Firebase authentication state for the entire application.
+ *
+ * Also monitors customer activity and automatically signs out after
+ * 15 minutes of inactivity.
+ */
+export function FirebaseAuthProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
   const queryClient = useQueryClient();
+
   const [state, setState] = useState<FirebaseAuthState>(ANONYMOUS);
+
   const lastAuthId = useRef<string | null | undefined>(undefined);
 
+  // Subscribe to Firebase authentication changes.
   useEffect(() => {
     if (!IS_FIREBASE_CONFIGURED) {
-      // Nothing to subscribe to. Report readiness so the login check
-      // resolves and the pages can explain what is missing.
       setState({ ...ANONYMOUS, isReady: true });
       return;
     }
@@ -103,16 +157,186 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
         isConfigured: true,
       });
 
-      // A hourly token refresh fires this listener with the same uid and
-      // changes nothing the API would answer differently, so only a real
-      // change of account refetches the session.
       const authId = user?.uid ?? null;
-      if (lastAuthId.current !== undefined && lastAuthId.current !== authId) {
-        void queryClient.invalidateQueries({ queryKey: authKeys.session() });
+
+      if (
+        lastAuthId.current !== undefined &&
+        lastAuthId.current !== authId
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: authKeys.session(),
+        });
       }
+
       lastAuthId.current = authId;
     });
   }, [queryClient]);
+
+  // Monitor inactivity for authenticated customers.
+  useEffect(() => {
+    if (!state.isReady || !state.authId || !IS_FIREBASE_CONFIGURED) {
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let logoutStarted = false;
+    let lastLocalWrite = 0;
+
+    // A new login is considered activity.
+    saveLastActivity(Date.now());
+
+    /**
+     * Sign out once the inactivity period has elapsed.
+     */
+    async function expireSession() {
+      if (logoutStarted) {
+        return;
+      }
+
+      logoutStarted = true;
+
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+
+      try {
+        // Firebase logout first, so protected API requests lose
+        // their authentication token immediately.
+        await signOutOfFirebase();
+
+        // Terminate the corresponding Django session.
+        const data = await endSession();
+
+        queryClient.setQueryData(authKeys.session(), data);
+      } catch {
+        // If the backend request fails, Firebase may already be signed
+        // out. Refresh the session query to reconcile the state.
+        void queryClient.invalidateQueries({
+          queryKey: authKeys.session(),
+        });
+      } finally {
+        resetCustomerData(queryClient);
+      }
+    }
+
+    /**
+     * Checks elapsed inactivity time and schedules the next check.
+     */
+    function checkInactivity() {
+      if (logoutStarted) {
+        return;
+      }
+
+      const lastActivity = readLastActivity();
+
+      // Missing or invalid activity data is treated as inactivity.
+      const elapsed = lastActivity
+        ? Date.now() - lastActivity
+        : INACTIVITY_TIMEOUT_MS;
+
+      const remaining = INACTIVITY_TIMEOUT_MS - elapsed;
+
+      if (remaining <= 0) {
+        void expireSession();
+        return;
+      }
+
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+
+      timer = setTimeout(checkInactivity, remaining);
+    }
+
+    /**
+     * Records activity and restarts the inactivity countdown.
+     */
+    function handleActivity() {
+      if (logoutStarted) {
+        return;
+      }
+
+      const now = Date.now();
+
+      // Do not allow a late event to revive an expired session.
+      const lastActivity = readLastActivity();
+
+      if (
+        !lastActivity ||
+        now - lastActivity >= INACTIVITY_TIMEOUT_MS
+      ) {
+        checkInactivity();
+        return;
+      }
+
+      // Limit localStorage writes to once per second.
+      if (now - lastLocalWrite >= ACTIVITY_WRITE_INTERVAL_MS) {
+        saveLastActivity(now);
+        lastLocalWrite = now;
+      }
+
+      checkInactivity();
+    }
+
+    // Mouse, keyboard, touch, pointer and scrolling activity.
+    const activityEvents = [
+      "pointerdown",
+      "pointermove",
+      "keydown",
+      "touchstart",
+      "scroll",
+      "wheel",
+    ] as const;
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, handleActivity, {
+        passive: true,
+      });
+    });
+
+    // Another tab may have recorded customer activity.
+    function handleStorage(event: StorageEvent) {
+      if (event.key === LAST_ACTIVITY_KEY) {
+        checkInactivity();
+      }
+    }
+
+    // Check again when the browser tab becomes visible or focused.
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        checkInactivity();
+      }
+    }
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", checkInactivity);
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+
+    // Start the initial countdown.
+    checkInactivity();
+
+    return () => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, handleActivity);
+      });
+
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", checkInactivity);
+
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+    };
+  }, [state.authId, state.isReady, queryClient]);
 
   return (
     <FirebaseAuthContext.Provider value={state}>
@@ -121,18 +345,13 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/** The Firebase sign-in state: the authId and whether it is known yet. */
+/** The Firebase sign-in state. */
 export function useFirebaseAuth(): FirebaseAuthState {
   return useContext(FirebaseAuthContext);
 }
 
 /**
  * The current session: who is signed in, and whether they are staff.
- *
- * `isPending` stays true until both the Firebase SDK and the API have
- * answered, which is what the route guards wait on — rendering a
- * protected page before then would flash the login screen at a customer
- * who is in fact signed in.
  */
 export function useSession() {
   const { authId, isReady, isConfigured } = useFirebaseAuth();
@@ -140,21 +359,14 @@ export function useSession() {
   const query = useQuery<SessionResponse, ApiError>({
     queryKey: authKeys.session(),
     queryFn: getSession,
-    // Asking before the SDK has restored the saved sign-in would send an
-    // unauthenticated request and cache "nobody is signed in".
     enabled: isReady,
-    // The session is cheap and decides what the whole UI may show, so it
-    // is kept fresh rather than served from a long-lived cache.
     staleTime: 0,
   });
 
   const user = query.data?.user ?? null;
 
-  // The API's answer must be about the account the SDK currently holds.
-  // The two disagree only in the moment between switching accounts and
-  // the refetch landing, and showing one customer's name above another
-  // customer's orders would be worse than showing nothing.
-  const matchesAuthId = user === null || authId === null || user.uid === authId;
+  const matchesAuthId =
+    user === null || authId === null || user.uid === authId;
 
   return {
     ...query,
@@ -171,11 +383,6 @@ export function useSession() {
 
 /**
  * Wraps a Firebase sign-in so the API learns about it.
- *
- * Every successful sign-in is followed by one POST to `/auth/signin/`:
- * that is what links the Firebase uid to a customer account and hands
- * over the guest cart. Caches that depend on who the customer is are
- * dropped at the same time.
  */
 function useSignInMutation<TVariables>(
   signIn: (variables: TVariables) => Promise<unknown>,
@@ -194,25 +401,14 @@ function useSignInMutation<TVariables>(
   });
 }
 
-function resetCustomerData(
-  queryClient: ReturnType<typeof useQueryClient>,
-): void {
-  // Who the customer is changes what the cart, order history and review
-  // ownership contain, so drop those caches.
-  void queryClient.invalidateQueries({ queryKey: ["cart"] });
-  void queryClient.invalidateQueries({ queryKey: ["orders"] });
-  void queryClient.invalidateQueries({ queryKey: ["reviews"] });
-  void queryClient.invalidateQueries({ queryKey: ["admin"] });
-}
-
-/** Sign in with an email address and password. */
+/** Sign in with email and password. */
 export function useEmailSignIn() {
   return useSignInMutation(({ email, password }: EmailCredentials) =>
     signInWithEmail(email, password),
   );
 }
 
-/** Create an account with an email address and password. */
+/** Create an account. */
 export function useEmailSignUp() {
   return useSignInMutation(
     ({ email, password, displayName }: EmailRegistration) =>
@@ -225,7 +421,7 @@ export function useGoogleSignIn() {
   return useSignInMutation(() => signInWithGoogle());
 }
 
-/** Email a password-reset link to an address. */
+/** Send a password-reset email. */
 export function usePasswordReset() {
   return useMutation<void, Error, string>({
     mutationFn: (email: string) => sendPasswordReset(email),
@@ -233,10 +429,9 @@ export function usePasswordReset() {
 }
 
 /**
- * Sign out of Firebase, then of the API.
+ * Manual sign-out.
  *
- * Firebase first: once the SDK has dropped the token, no request can be
- * authenticated again, even if the call to the API fails.
+ * Firebase is signed out before the backend session is terminated.
  */
 export function useSignOut() {
   const queryClient = useQueryClient();
@@ -253,18 +448,20 @@ export function useSignOut() {
   });
 }
 
-/** How a customer signed in, for display. */
+/** Display name for the sign-in provider. */
 export function providerLabel(provider: string): string {
   if (provider === "google.com") {
     return "Google";
   }
+
   if (provider === "password") {
     return "Email";
   }
+
   return provider;
 }
 
-/** The friendliest name available for the signed-in customer. */
+/** Friendly name of the signed-in customer. */
 export function useAccountName(): string {
   const { user } = useSession();
   const { displayName, email } = useFirebaseAuth();
