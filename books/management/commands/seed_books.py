@@ -13,7 +13,7 @@ SAMPLE_BOOKS = [
         "title": "Clean Code",
         "author": "Robert C. Martin",
         "category": "Software Engineering",
-        "price": Decimal("42.50"),
+        "price": Decimal("2499.00"),
         "stock_quantity": 12,
         "cover_image_url": (
             "https://covers.openlibrary.org/b/isbn/9780132350884-L.jpg"
@@ -30,7 +30,7 @@ SAMPLE_BOOKS = [
         "title": "Design Patterns: Elements of Reusable Object-Oriented Software",
         "author": "Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides",
         "category": "Software Engineering",
-        "price": Decimal("54.99"),
+        "price": Decimal("3299.00"),
         "stock_quantity": 5,
         "cover_image_url": (
             "https://covers.openlibrary.org/b/isbn/9780201633610-L.jpg"
@@ -47,7 +47,7 @@ SAMPLE_BOOKS = [
         "title": "Effective Java",
         "author": "Joshua Bloch",
         "category": "Programming",
-        "price": Decimal("47.99"),
+        "price": Decimal("2799.00"),
         "stock_quantity": 8,
         "cover_image_url": (
             "https://covers.openlibrary.org/b/isbn/9780134685991-L.jpg"
@@ -64,7 +64,7 @@ SAMPLE_BOOKS = [
         "title": "Designing Data-Intensive Applications",
         "author": "Martin Kleppmann",
         "category": "Data Engineering",
-        "price": Decimal("59.99"),
+        "price": Decimal("3499.00"),
         "stock_quantity": 3,
         "cover_image_url": (
             "https://covers.openlibrary.org/b/isbn/9781491950296-L.jpg"
@@ -81,7 +81,7 @@ SAMPLE_BOOKS = [
         "title": "Head First Design Patterns",
         "author": "Eric Freeman, Elisabeth Robson",
         "category": "Software Engineering",
-        "price": Decimal("39.99"),
+        "price": Decimal("2299.00"),
         "stock_quantity": 0,
         "cover_image_url": (
             "https://covers.openlibrary.org/b/isbn/9780596007126-L.jpg"
@@ -98,7 +98,7 @@ SAMPLE_BOOKS = [
         "title": "The Pragmatic Programmer",
         "author": "Andrew Hunt, David Thomas",
         "category": "Software Engineering",
-        "price": Decimal("44.99"),
+        "price": Decimal("2599.00"),
         "stock_quantity": 10,
         "cover_image_url": (
             "https://covers.openlibrary.org/b/isbn/9780201616224-L.jpg"
@@ -115,7 +115,7 @@ SAMPLE_BOOKS = [
         "title": "The C Programming Language",
         "author": "Brian W. Kernighan, Dennis M. Ritchie",
         "category": "Programming",
-        "price": Decimal("35.00"),
+        "price": Decimal("1999.00"),
         "stock_quantity": 7,
         "cover_image_url": (
             "https://covers.openlibrary.org/b/isbn/9780131103627-L.jpg"

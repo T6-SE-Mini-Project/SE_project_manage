@@ -67,7 +67,7 @@ jobs:
           DB_PORT: "3306"
           DJANGO_SECRET_KEY: ci-only-secret-key
           DEBUG: "True"
-        run: python manage.py test accounts books cart
+        run: python manage.py test accounts books cart orders
 
   frontend:
     runs-on: ubuntu-latest

@@ -146,3 +146,55 @@ class CustomerLoginTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_login_honours_safe_next_url(self):
+        response = self.client.post(
+            f"{self.url}?next=/checkout/",
+            {
+                "username": self.username,
+                "password": self.password,
+                "next": "/checkout/",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/checkout/")
+
+    def test_login_ignores_external_next_url(self):
+        response = self.client.post(
+            f"{self.url}?next=https://example.com/",
+            {
+                "username": self.username,
+                "password": self.password,
+                "next": "https://example.com/",
+            },
+        )
+
+        self.assertRedirects(response, reverse("login_success"))
+
+
+class SessionStatusTests(TestCase):
+    def test_guest_session_is_reported_as_anonymous(self):
+        response = self.client.get(reverse("session_status"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["authenticated"])
+        self.assertIsNone(response.json()["user"])
+
+    def test_authenticated_session_returns_customer_details(self):
+        user = User.objects.create_user(
+            username="sessionuser",
+            email="sessionuser@example.com",
+            password="StrongPass123!",
+        )
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("session_status"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["authenticated"])
+        self.assertEqual(response.json()["user"]["username"], "sessionuser")
+        self.assertEqual(
+            response.json()["user"]["email"],
+            "sessionuser@example.com",
+        )

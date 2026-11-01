@@ -187,8 +187,12 @@ export default function CartPage() {
               <strong>{formatPrice(cart.total)}</strong>
             </div>
             <p className="muted">
-              Checkout and payment are handled in a later milestone.
+              Continue to billing to review your address before placing the
+              order.
             </p>
+            <Link className="button primary" to="/checkout">
+              Proceed to checkout
+            </Link>
             <Link className="button secondary" to="/books">
               Continue shopping
             </Link>

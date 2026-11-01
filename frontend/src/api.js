@@ -65,6 +65,8 @@ async function request(path, { method = "GET", body, headers = {} } = {}) {
       data.error || `Request failed (${response.status}).`,
     );
     error.status = response.status;
+    error.data = data;
+    error.errors = data.errors || {};
     throw error;
   }
 
@@ -119,4 +121,26 @@ export function removeCartItem(itemId) {
   return request(`/cart/items/${itemId}/`, {
     method: "DELETE",
   });
+}
+
+export function getSession() {
+  return request("/auth/session/");
+}
+
+export function getBillingAddresses() {
+  return request("/billing-addresses/");
+}
+
+export function placeOrder(billingAddress, saveAddress = false) {
+  return request("/checkout/", {
+    method: "POST",
+    body: {
+      billing_address: billingAddress,
+      save_address: saveAddress,
+    },
+  });
+}
+
+export function getOrder(orderId) {
+  return request(`/orders/${orderId}/`);
 }
