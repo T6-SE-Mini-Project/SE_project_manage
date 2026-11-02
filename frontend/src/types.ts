@@ -393,3 +393,14 @@ export interface BackupListResponse {
   };
   runs: BackupRun[];
 }
+   export interface BillingAddress {
+     full_name: string;
+     phone_number: string;
+     email: string;
+     address_line1: string;
+     address_line2: string;
+     city: string;
+     state: string;
+     postal_code: string;
+     country: string;
+   }
