@@ -19,7 +19,7 @@ from django.utils import timezone
 
 from books.models import Book
 
-from .models import Order, OrderItem
+from .models import BillingAddress, Order, OrderItem
 
 
 def _availability_problems(items, books):
@@ -99,8 +99,36 @@ def cart_order_total(cart):
     return total.quantize(Decimal("0.01"))
 
 
+def resolve_billing_address(form, user, save_address=False):
+    """Return a ``BillingAddress`` for the validated checkout form.
+
+    A signed-in customer who asked to save the address gets a reusable row,
+    deduplicated on the normalised fingerprint so repeated checkouts do not
+    pile up identical addresses. Guests, and customers who did not ask to
+    save, get an order-only snapshot with no account attached.
+    """
+    address = form.save(commit=False)
+
+    if user is not None and user.is_authenticated and save_address:
+        address.user = user
+        existing = BillingAddress.objects.filter(
+            user=user,
+            fingerprint=address.calculate_fingerprint(),
+        ).first()
+
+        if existing is not None:
+            return existing
+
+        address.save()
+        return address
+
+    address.user = None
+    address.save()
+    return address
+
+
 @transaction.atomic
-def place_order_from_cart(cart, user=None):
+def place_order_from_cart(cart, user=None, billing_address=None):
     """Create an ``Order`` (status PENDING) from the cart.
 
     Returns ``(order, problems)``. When ``problems`` is non-empty no order
@@ -110,6 +138,10 @@ def place_order_from_cart(cart, user=None):
     decremented here: it is reserved when payment succeeds (issue #9), so
     a failed payment never leaves the catalogue inconsistent and the
     customer can retry payment or edit the cart.
+
+    ``billing_address`` is optional for backwards compatibility with the
+    orders placed before this feature; the checkout page always supplies
+    one.
     """
     items = list(
         cart.items.select_related("book").order_by("added_at", "pk")
@@ -143,6 +175,7 @@ def place_order_from_cart(cart, user=None):
     order = Order.objects.create(
         user=user if user is not None and user.is_authenticated else None,
         session_key=cart.session_key,
+        billing_address=billing_address,
         status=Order.STATUS_PENDING,
         total_amount=cart_order_total(cart),
     )

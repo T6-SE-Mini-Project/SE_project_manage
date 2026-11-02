@@ -1,3 +1,27 @@
+def serialize_billing_address(address):
+    """The billing address snapshot shown after checkout.
+
+    Returns ``None`` for orders placed before the feature existed.
+    """
+    if address is None:
+        return None
+
+    return {
+        "id": address.id,
+        "full_name": address.full_name,
+        "phone_number": address.phone_number,
+        "email": address.email,
+        "address_line1": address.address_line1,
+        "address_line2": address.address_line2,
+        "city": address.city,
+        "state": address.state,
+        "postal_code": address.postal_code,
+        "country": address.country,
+        "created_at": address.created_at.isoformat(),
+        "updated_at": address.updated_at.isoformat(),
+    }
+
+
 def _cancellation_fields(order):
     """Cancellation state shared by the order representations (issue #10)."""
     return {
@@ -32,6 +56,7 @@ def serialize_order(order):
             }
             for item in order.items.all()
         ],
+        "billing_address": serialize_billing_address(order.billing_address),
         "created_at": order.created_at.isoformat(),
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
         **_cancellation_fields(order),
