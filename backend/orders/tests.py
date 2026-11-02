@@ -9,7 +9,7 @@ from django.urls import reverse
 from accounts.tests_firebase import FirebaseTokenMixin
 from books.models import Book
 from cart.models import Cart
-from .models import Order, OrderItem
+from .models import BillingAddress, Order, OrderItem
 from .services import _availability_problems
 
 
@@ -642,3 +642,225 @@ class OrderCancellationTests(TestCase):
             body["order"]["cancellation_reason"],
             "Cancelled by the customer.",
         )
+
+
+VALID_BILLING_ADDRESS = {
+    "full_name": "Ananya Sharma",
+    "phone_number": "9876543210",
+    "email": "ananya.sharma@example.com",
+    "address_line1": "12 MG Road",
+    "address_line2": "Near City Library",
+    "city": "Bengaluru",
+    "state": "Karnataka",
+    "postal_code": "560001",
+    "country": "India",
+}
+
+
+class BillingAddressCheckoutTests(TestCase, FirebaseTokenMixin):
+    def setUp(self):
+        self.book = Book.objects.create(
+            title="Billing Test Book",
+            author="Test Author",
+            isbn="9780132350884",
+            description="A book used by billing tests.",
+            category="Fiction",
+            price=Decimal("12.50"),
+            stock_quantity=5,
+        )
+
+    def add_to_cart(self, book=None, quantity=1, client=None):
+        target = client or self.client
+        return target.post(
+            reverse("cart_item_add"),
+            data=json.dumps(
+                {"book_id": (book or self.book).pk, "quantity": quantity}
+            ),
+            content_type="application/json",
+        )
+
+    def checkout(self, address=None, save_address=False, client=None, extra_payload=None):
+        target = client or self.client
+        payload = {}
+        if address is not None:
+            payload["billing_address"] = address
+        if save_address:
+            payload["save_address"] = True
+        if extra_payload:
+            payload.update(extra_payload)
+        return target.post(
+            reverse("order_collection"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_valid_billing_address_creates_order_and_persists(self):
+        self.add_to_cart(quantity=2)
+
+        response = self.checkout(address=VALID_BILLING_ADDRESS)
+
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        order = Order.objects.select_related("billing_address").get(
+            pk=data["order"]["id"]
+        )
+
+        self.assertEqual(Order.objects.count(), 1)
+        self.assertEqual(BillingAddress.objects.count(), 1)
+        self.assertIsNone(order.user)
+        self.assertEqual(order.status, Order.STATUS_PENDING)
+        self.assertEqual(order.total_amount, Decimal("25.00"))
+        self.assertIsNotNone(order.billing_address)
+        self.assertEqual(order.billing_address.full_name, "Ananya Sharma")
+        self.assertEqual(order.billing_address.phone_number, "9876543210")
+        self.assertEqual(order.billing_address.postal_code, "560001")
+        self.assertEqual(order.billing_address.country, "India")
+
+        order_data = data["order"]
+        self.assertIn("billing_address", order_data)
+        self.assertEqual(order_data["billing_address"]["full_name"], "Ananya Sharma")
+
+    def test_order_without_billing_address_backward_compatible(self):
+        self.add_to_cart()
+
+        response = self.client.post(
+            reverse("order_collection"),
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        order = Order.objects.get(pk=response.json()["order"]["id"])
+        self.assertIsNone(order.billing_address)
+        self.assertIsNone(response.json()["order"]["billing_address"])
+
+    def test_missing_required_fields_are_rejected(self):
+        self.add_to_cart()
+        address = {
+            **VALID_BILLING_ADDRESS,
+            "full_name": "",
+            "address_line1": "",
+            "city": " ",
+            "state": "",
+            "country": "",
+        }
+
+        response = self.checkout(address=address)
+
+        self.assertEqual(response.status_code, 400)
+        errors = response.json().get("errors", {})
+
+        for field in ("full_name", "address_line1", "city", "state", "country"):
+            self.assertIn(field, errors)
+
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertEqual(BillingAddress.objects.count(), 0)
+
+    def test_invalid_phone_number_is_rejected(self):
+        self.add_to_cart()
+
+        for phone in ("12345", "98765abcde", "98765432101"):
+            with self.subTest(phone=phone):
+                response = self.checkout(
+                    address={**VALID_BILLING_ADDRESS, "phone_number": phone}
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("phone_number", response.json()["errors"])
+
+    def test_invalid_postal_code_is_rejected(self):
+        self.add_to_cart()
+
+        for pin in ("123", "56000a", "5600001"):
+            with self.subTest(pin=pin):
+                response = self.checkout(
+                    address={**VALID_BILLING_ADDRESS, "postal_code": pin}
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("postal_code", response.json()["errors"])
+
+    def test_invalid_email_is_rejected(self):
+        self.add_to_cart()
+
+        response = self.checkout(
+            address={**VALID_BILLING_ADDRESS, "email": "not-an-email"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.json()["errors"])
+
+    def test_invalid_billing_address_type_is_rejected(self):
+        self.add_to_cart()
+
+        response = self.client.post(
+            reverse("order_collection"),
+            data=json.dumps({"billing_address": "not an object"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("billing_address", response.json()["error"])
+
+    def test_authenticated_customer_can_save_and_reuse_address(self):
+        user = get_user_model().objects.create_user(
+            username="billinguser",
+            email="billinguser@example.com",
+            password="StrongPass123!",
+        )
+        self.client.force_login(user)
+        self.add_to_cart()
+
+        first = self.checkout(address=VALID_BILLING_ADDRESS, save_address=True)
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(BillingAddress.objects.count(), 1)
+        first_addr = BillingAddress.objects.get()
+        self.assertEqual(first_addr.user, user)
+
+        self.add_to_cart()
+        second = self.checkout(address=VALID_BILLING_ADDRESS, save_address=True)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(BillingAddress.objects.count(), 1)
+        self.assertEqual(Order.objects.count(), 2)
+
+        listing = self.client.get(reverse("billing_address_list"))
+        self.assertEqual(listing.status_code, 200)
+        addresses = listing.json()["addresses"]
+        self.assertEqual(len(addresses), 1)
+        self.assertEqual(addresses[0]["full_name"], "Ananya Sharma")
+        self.assertEqual(addresses[0]["postal_code"], "560001")
+
+    def test_guest_save_flag_does_not_attach_address_to_user(self):
+        self.add_to_cart()
+
+        response = self.checkout(address=VALID_BILLING_ADDRESS, save_address=True)
+        self.assertEqual(response.status_code, 201)
+        address = BillingAddress.objects.get()
+        self.assertIsNone(address.user)
+
+        listing = self.client.get(reverse("billing_address_list"))
+        self.assertEqual(listing.status_code, 401)
+
+    def test_saved_addresses_are_scoped_to_user(self):
+        user_model = get_user_model()
+        user_a = user_model.objects.create_user(username="usera", password="StrongPass123!")
+        user_b = user_model.objects.create_user(username="userb", password="StrongPass123!")
+
+        BillingAddress.objects.create(user=user_a, **VALID_BILLING_ADDRESS)
+        BillingAddress.objects.create(
+            user=user_b,
+            **{**VALID_BILLING_ADDRESS, "full_name": "User B Address", "city": "Mumbai"},
+        )
+
+        self.client.force_login(user_a)
+        response = self.client.get(reverse("billing_address_list"))
+        self.assertEqual(response.status_code, 200)
+        addresses = response.json()["addresses"]
+        self.assertEqual(len(addresses), 1)
+        self.assertEqual(addresses[0]["full_name"], "Ananya Sharma")
+
+    def test_order_detail_includes_billing_address(self):
+        self.add_to_cart()
+        placed = self.checkout(address=VALID_BILLING_ADDRESS).json()["order"]
+
+        response = self.client.get(reverse("order_detail", args=[placed["id"]]))
+        self.assertEqual(response.status_code, 200)
+        detail = response.json()["order"]
+        self.assertIsNotNone(detail["billing_address"])
+        self.assertEqual(detail["billing_address"]["full_name"], "Ananya Sharma")

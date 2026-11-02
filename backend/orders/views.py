@@ -16,12 +16,14 @@ from config.cache import (
 )
 from config.http import json_error, read_json
 
-from .models import Order
-from .serializers import serialize_order
+from .forms import BillingAddressForm, form_errors
+from .models import BillingAddress, Order
+from .serializers import serialize_billing_address, serialize_order
 from .services import (
     cancel_order,
     check_cart_availability,
     place_order_from_cart,
+    resolve_billing_address,
 )
 
 
@@ -58,6 +60,7 @@ def _get_scoped_order(request, pk):
     return (
         _orders_for_request(request)
         .filter(pk=pk)
+        .select_related("billing_address")
         .prefetch_related("items")
         .first()
     )
@@ -69,7 +72,9 @@ def order_collection(request):
     """GET lists this customer's order history; POST places a new order."""
     if request.method == "GET":
         orders = list(
-            _orders_for_request(request).prefetch_related("items")
+            _orders_for_request(request)
+            .select_related("billing_address")
+            .prefetch_related("items")
         )
         return JsonResponse(
             {
@@ -78,10 +83,40 @@ def order_collection(request):
             }
         )
 
+    billing_address = None
+    data = {}
+    if request.body:
+        content_type = request.content_type or ""
+        if content_type == "application/json" or not content_type.startswith("multipart/"):
+            data, error_response = read_json(request)
+            if error_response is not None:
+                return error_response
+
+    if isinstance(data, dict) and "billing_address" in data:
+        billing_data = data.get("billing_address")
+        if not isinstance(billing_data, dict):
+            return json_error("billing_address must be an object.", 400)
+
+        form = BillingAddressForm(data=billing_data)
+        if not form.is_valid():
+            return json_error(
+                "Please correct the highlighted fields.",
+                400,
+                errors=form_errors(form),
+            )
+
+        save_address = bool(data.get("save_address", False))
+        billing_address = resolve_billing_address(
+            form,
+            user=_current_user(request),
+            save_address=save_address,
+        )
+
     cart = get_cart(request)
     order, problems = place_order_from_cart(
         cart,
         user=_current_user(request),
+        billing_address=billing_address,
     )
 
     if problems:
@@ -97,6 +132,27 @@ def order_collection(request):
     return JsonResponse(
         {"order": serialize_order(order)},
         status=201,
+    )
+
+
+@require_http_methods(["GET"])
+def billing_address_list(request):
+    """Return the authenticated customer's saved billing addresses."""
+    if not request.user.is_authenticated:
+        return json_error("Sign in to view saved billing addresses.", 401)
+
+    addresses = (
+        BillingAddress.objects.filter(user=request.user)
+        .order_by("-updated_at", "-pk")
+    )
+
+    return JsonResponse(
+        {
+            "addresses": [
+                serialize_billing_address(address)
+                for address in addresses
+            ]
+        }
     )
 
 
@@ -151,7 +207,9 @@ def order_cancel(request, pk):
         return json_error(error, 409, order=serialize_order(order))
 
     cancelled = (
-        Order.objects.prefetch_related("items").get(pk=cancelled.pk)
+        Order.objects.select_related("billing_address")
+        .prefetch_related("items")
+        .get(pk=cancelled.pk)
     )
 
     # Cancelling releases the stock the order reserved, so the catalogue
