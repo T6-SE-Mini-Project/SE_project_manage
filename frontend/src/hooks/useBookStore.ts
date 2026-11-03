@@ -38,6 +38,8 @@ import type {
   OrderResponse,
   PaymentResponse,
 } from "../types";
+import { getBillingAddresses } from "../api";
+import type { BillingAddressListResponse } from "../types";
 
 export const queryKeys = {
   books: (filters: BookFilters) => ["books", filters] as const,
@@ -158,6 +160,15 @@ export function usePlaceOrder() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.orders() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.availability() });
     },
+  });
+}
+
+/** The signed-in customer's saved billing addresses. Fails for guests. */
+export function useBillingAddresses() {
+  return useQuery<BillingAddressListResponse, ApiError>({
+    queryKey: ["billing-addresses"],
+    queryFn: getBillingAddresses,
+    retry: false,
   });
 }
 

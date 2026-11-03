@@ -31,6 +31,10 @@ import type {
   SalesReportResponse,
   SessionResponse,
 } from "./types";
+import type {
+  BillingAddressListResponse,
+  PlaceOrderInput,
+} from "./types";
 
 /** Error thrown by every failed API call, carrying the HTTP status. */
 export class ApiError extends Error {
@@ -212,8 +216,20 @@ export function getCartAvailability(): Promise<AvailabilityResponse> {
   return request("/orders/availability/");
 }
 
-export function placeOrder(): Promise<OrderResponse> {
-  return request("/orders/", { method: "POST" });
+export function placeOrder(input?: PlaceOrderInput): Promise<OrderResponse> {
+  return request("/orders/", {
+    method: "POST",
+    body: input
+      ? {
+          billing_address: input.billing_address,
+          save_address: input.save_address,
+        }
+      : undefined,
+  });
+}
+
+export function getBillingAddresses(): Promise<BillingAddressListResponse> {
+  return request("/orders/billing-addresses/");
 }
 
 export function getOrders(): Promise<OrderListResponse> {

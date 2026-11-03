@@ -404,3 +404,16 @@ export interface BackupListResponse {
      postal_code: string;
      country: string;
    }
+
+export interface SavedBillingAddress extends BillingAddress {
+  id: number;
+}
+
+export interface BillingAddressListResponse {
+  addresses: SavedBillingAddress[];
+}
+
+export interface PlaceOrderInput {
+  billing_address: BillingAddress;
+  save_address: boolean;
+}
