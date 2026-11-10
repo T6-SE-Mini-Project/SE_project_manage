@@ -17,9 +17,7 @@ Features demonstrated:
 
 ## Sprint 2
 
-**Status:** Recording complete; the shareable link is being added before submission.
-
-**Link:** _To be added._
+**Demo Video:** [Watch the Sprint 2 Demo](Sprint_2_Demo.mp4)
 
 Planned demonstration:
 
