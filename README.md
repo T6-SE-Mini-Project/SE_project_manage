@@ -55,6 +55,21 @@ scripts/            End-to-end smoke test
 `instruction.md` explains how the pieces fit together and how to add a
 new feature. Read it before your first change.
 
+## Project documentation
+
+| Document | Purpose |
+|---|---|
+| [SRS](Docs/SRS_TEAM_T6.docx) | Requirements, acceptance criteria and traceability |
+| [SAD](Docs/Online_Book_Store_Architecture_Design_PES1UG24CS682-1.docx) | As-built React, Django and MySQL architecture |
+| [Test Plan](Docs/Test_Plan_2.docx) | 33 test cases with executed results |
+| [Validation Evidence](Docs/Validation_Evidence.md) | Test, load, backup, security and deployment evidence |
+| [Deviations](Docs/Deviations.md) | Where the implementation deliberately differs from the original plan |
+| [Agile Record](Docs/Agile_Record.md) | Team roles, backlog, sprint allocation and PR history |
+| [Retrospective Review](Docs/Retrospective_Review.md) | Honest retrospective review of all pull requests |
+| [Defect Register](Docs/Defect_Register.md) | Defect status and regression summary |
+| [Demo Videos](Docs/Demo_Video.md) | Sprint demo links and demonstrated features |
+| [Deployment](Docs/Deployment.md) | Render, Vercel, Aiven and Redis setup |
+
 ## Prerequisites
 
 - Python 3.12 or newer

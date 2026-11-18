@@ -1,3 +1,27 @@
+# Validation Evidence — Online Book Store
+
+> **Current verification status — 18 November 2026.** This is the authoritative
+> summary. The sections below are the original evidence records, kept with their
+> original execution dates.
+>
+> - **Backend:** 342 tests passed, 0 failures, 0 errors
+>   (`python manage.py test --settings=config.settings_test`, 15.401 s).
+> - **Frontend:** 27 tests passed across 6 test files (`npm test`).
+> - **Frontend type-check:** passed (`npm run typecheck`).
+> - **Frontend production build:** passed (`npm run build`, 126 modules,
+>   built in 3.62 s).
+> - **Requirement status (Test Plan v1.1):** 28 Pass, 3 Partial, 2 Not Verified
+>   across 33 requirements.
+> - **Defects:** DEF-01, DEF-02 and DEF-05 resolved; DEF-03 (availability
+>   monitoring) and DEF-04 (MySQL write-path load test) remain open.
+> - **Session timeout:** DEF-05 was fixed in commit `8a92a67`;
+>   `frontend/src/hooks/useAuth.tsx` enforces a 15-minute inactivity logout and
+>   is covered by 8 `useAuth` tests.
+>
+> Where a historical section below records an older count (for example 330 or
+> 331 backend tests) or records DEF-05 as open, this summary supersedes it. The
+> older text is retained to preserve the evidence trail.
+
 # Validation Evidence — Issues #4, #5, #6, #7, #13, #16
 
 - **Branch:** `feature/book-browsing-details`
@@ -369,6 +393,10 @@ and passed. The complete suite was then rerun successfully.
 
 **Result: Pass for the 330 automated backend tests.**
 
+> **Superseded on 18 November 2026:** the current suite contains 342 backend
+> tests and all pass. This 31 October record is retained as the original
+> integration-test evidence.
+
 ### Limitations
 
 - Tests used an isolated SQLite database, not production MySQL.
@@ -389,6 +417,10 @@ and passed. The complete suite was then rerun successfully.
 - Outstanding observations: `Docs/Defect_Register.md`.
 
 **Result:** Backend regression tests passed. Full frontend regression verification is pending a successful GitHub Actions run.
+
+> **Update — 18 November 2026:** the frontend suite now runs locally and in CI:
+> 27 tests across 6 files pass, and the type-check and production build pass.
+> The DEF-05 finding below was resolved by commit `8a92a67`.
 
 
 
@@ -412,7 +444,7 @@ and passed. The complete suite was then rerun successfully.
 | OBS-SR-002 — Role-based authorization | Tested anonymous, customer and administrator access to administrator endpoints. | `administration.tests` — `AdminAuthorizationTests` | Pass |
 | OBS-SR-004 — HTTPS/TLS | Checked deployed frontend and backend HTTPS endpoints, HTTP redirect and security headers. | Live `curl` requests recorded below | Pass |
 | OBS-SR-005 — Unauthorized modification prevention | Tested customer attempts to create books, update stock, change order status and deactivate accounts. Verified rejected changes did not modify protected records. | `administration.tests.AdminAuthorizationTests`; `AdminCatalogueTests.test_customer_cannot_update_book_stock` | Pass |
-| OBS-SR-006 — Inactivity-based session termination | Inspected backend session settings and frontend Firebase authentication implementation for inactivity detection and automatic logout. | `backend/config/settings.py`; `frontend/src/firebase.ts`; search for inactivity and auto-logout handling | Not satisfied — DEF-05 |
+| OBS-SR-006 — Inactivity-based session termination | Re-tested after the fix: `useAuth` records activity and signs out after 15 minutes of inactivity. | `frontend/src/hooks/useAuth.tsx`; `frontend/src/hooks/useAuth.test.tsx`; commit `8a92a67` | **Pass** — DEF-05 resolved |
 
 ## OBS-SR-004 — HTTPS/TLS verification
 
@@ -453,21 +485,37 @@ The newly added stock authorization test passed independently.
 
 **Result:** Pass for the tested inventory and order modification operations.
 
-## OBS-SR-006 — Session inactivity timeout finding
+## OBS-SR-006 — Session inactivity timeout
+
+### Original finding (1 November 2026)
 
 The backend configuration defines `SESSION_COOKIE_AGE = 900` and `SESSION_SAVE_EVERY_REQUEST = True`.
 
 However, the inspected Django session cookie is used for guest cart and order data. Customer authentication is handled through Firebase.
 
-The frontend uses Firebase `browserLocalPersistence` and `onIdTokenChanged`. Token refresh is supported, but no application-level inactivity detection or automatic logout mechanism was found.
+The frontend used Firebase `browserLocalPersistence` and `onIdTokenChanged`. Token refresh was supported, but no application-level inactivity detection or automatic logout mechanism was present.
 
 A source search for `lastActivity`, `idleTimeout`, `inactivity`, `autoLogout`, `setTimeout` and related terms found no inactivity implementation. The only `setTimeout` match was in a unit test.
 
-Therefore, the 900-second guest session expiry does not establish authenticated customer inactivity termination.
+Therefore, the 900-second guest session expiry did not establish authenticated customer inactivity termination.
 
-**Result: Not satisfied by the current implementation.**
+**Original result: Not satisfied by the implementation at that time.**
 
 **Defect recorded:** DEF-05 in `Docs/Defect_Register.md`.
+
+### Resolution (18 November 2026)
+
+`frontend/src/hooks/useAuth.tsx` now enforces an authenticated-session inactivity
+limit. It records user activity, checks the elapsed idle time, and signs the
+customer out of Firebase after 15 minutes without activity
+(`INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000`). The timestamp is cleared on sign-out.
+
+Commit: `8a92a67 fix(auth): enforce 15-minute inactivity logout`.
+
+The frontend suite includes 8 `useAuth` tests covering the timeout, activity
+refresh and sign-out behavior. All 27 frontend tests pass.
+
+**Current result: Pass — DEF-05 resolved.**
 
 ## Full regression test execution
 
@@ -477,3 +525,41 @@ Command:
 
 ```cmd
 python manage.py test --settings=config.settings_test -v 1
+```
+
+Recorded result (18 November 2026):
+
+```text
+Found 342 test(s).
+System check identified no issues (0 silenced).
+Ran 342 tests in 15.401s
+
+OK
+Destroying test database for alias 'default'...
+TC-OBS-019 search timings (seconds): min=0.0016 p90=0.0030 max=0.0031; 20/20 within 3.0s
+```
+
+### Frontend
+
+Command:
+
+```cmd
+npm test
+```
+
+Recorded result (18 November 2026):
+
+```text
+Test Files  6 passed (6)
+Tests       27 passed (27)
+```
+
+`npm run typecheck` and `npm run build` also passed on the same tree.
+
+### Requirement summary
+
+Test Plan v1.1 records 28 Pass, 3 Partial and 2 Not Verified across the 33
+requirements. The open verification gaps are OBS-NF-002 (monthly availability)
+and OBS-NF-005 (MySQL write-path load test); OBS-NF-001, OBS-NF-004 and
+OBS-NF-006 are partial. See `Docs/Test_Plan_2.docx` and
+`Docs/Defect_Register.md`.
